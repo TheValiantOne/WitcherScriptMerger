@@ -158,7 +158,7 @@ namespace WitcherScriptMerger.Inventory
                             using (var reportForm = new PackReportForm(newBundlePath))
                             {
                                 ProgressInfo.CurrentAction = "Showing pack report";
-                                Program.MainForm.ShowModal(reportForm);
+                                Program.Notifier.ShowModal(reportForm);
                             }
                         }
                     }
@@ -282,7 +282,7 @@ namespace WitcherScriptMerger.Inventory
                         source1.Name, source2.Name))
                     {
                         ProgressInfo.CurrentAction = "Showing merge report";
-                        Program.MainForm.ShowModal(reportForm);
+                        Program.Notifier.ShowModal(reportForm);
                     }
                 }
                 return new FileInfo(_outputPath);
@@ -293,7 +293,7 @@ namespace WitcherScriptMerger.Inventory
 
         bool ConfirmRemainingConflict(string mergedModName)
         {
-            return (DialogResult.Yes == Program.MainForm.ShowMessage(
+            return (DialogResult.Yes == Program.Notifier.ShowMessage(
                 "There will still be a conflict if you use the merged mod name " + mergedModName + ".\n\n" +
                     "The Witcher 3 loads mods in case-insensitive ASCII order, " +
                     "so this merged mod name will load after one of the original mods, " +
@@ -306,7 +306,7 @@ namespace WitcherScriptMerger.Inventory
 
         bool ConfirmOutputOverwrite(string outputPath)
         {
-            return (DialogResult.Yes == Program.MainForm.ShowMessage(
+            return (DialogResult.Yes == Program.Notifier.ShowMessage(
                 "The output file below already exists! Overwrite?\n\n" + outputPath,
                 "Overwrite?",
                 MessageBoxButtons.YesNo,
@@ -323,7 +323,7 @@ namespace WitcherScriptMerger.Inventory
                 msg += $"\n\nContinue with {remainingMergesForFile} remaining merge{remainingMergesForFile.GetPluralS()} for file {fileName}?";
                 buttons = MessageBoxButtons.YesNo;
             }
-            var result = Program.MainForm.ShowMessage(msg, "Skipped Merge", buttons, MessageBoxIcon.Information);
+            var result = Program.Notifier.ShowMessage(msg, "Skipped Merge", buttons, MessageBoxIcon.Information);
             if (result == DialogResult.No)
             {
                 ProgressInfo.CurrentMergeNum += remainingMergesForFile;
@@ -418,7 +418,7 @@ namespace WitcherScriptMerger.Inventory
                 {
                     using (var reportForm = new PackReportForm(bundlePath))
                     {
-                        Program.MainForm.ShowModal(reportForm);
+                        Program.Notifier.ShowModal(reportForm);
                     }
                 }
             };
@@ -457,7 +457,7 @@ namespace WitcherScriptMerger.Inventory
             }
             catch (Exception ex)
             {
-                Program.MainForm.ShowMessage(
+                Program.Notifier.ShowMessage(
                     "Non-critical error: Failed to delete temporary unpacked bundle content.\n\n" + ex.Message,
                     "Error",
                     MessageBoxButtons.OK,
@@ -477,7 +477,7 @@ namespace WitcherScriptMerger.Inventory
             }
             catch (Exception ex)
             {
-                Program.MainForm.ShowMessage(
+                Program.Notifier.ShowMessage(
                     "Non-critical error: Failed to delete empty Merged Bundle Content directories.\n\n" + ex.Message,
                     "Error",
                     MessageBoxButtons.OK,

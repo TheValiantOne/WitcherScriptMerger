@@ -41,7 +41,7 @@ namespace WitcherScriptMerger.FileIndex
             ModCount = modDirPaths.Count;
             if (ModCount == 0)
             {
-                Program.MainForm.ShowMessage("Can't find any mods in the Mods directory.");
+                Program.Notifier.ShowMessage("Can't find any mods in the Mods directory.");
             }
 
             var bgWorker = new BackgroundWorker

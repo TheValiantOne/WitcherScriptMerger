@@ -11,7 +11,7 @@ namespace WitcherScriptMerger.Tools
         {
             if (!Directory.Exists(sourceDir))
             {
-                Program.MainForm.ShowError("Can't find content directory to pack into bundle:\n\n" + sourceDir, "Missing Directory");
+                Program.Notifier.ShowError("Can't find content directory to pack into bundle:\n\n" + sourceDir, "Missing Directory");
                 return 1;
             }
 
@@ -33,7 +33,7 @@ namespace WitcherScriptMerger.Tools
         {
             if (!File.Exists(ExePath))
             {
-                Program.MainForm.ShowError("Can't find wcc_lite at this location:\n\n" + ExePath, "Missing wcc_lite");
+                Program.Notifier.ShowError("Can't find wcc_lite at this location:\n\n" + ExePath, "Missing wcc_lite");
                 return 1;
             }
 
@@ -61,7 +61,7 @@ namespace WitcherScriptMerger.Tools
                     errorMsg = stdOutput;
                 if (errorMsg != null)
                 {
-                    Program.MainForm.ShowError(failureMsg + "\n\n" + errorMsg);
+                    Program.Notifier.ShowError(failureMsg + "\n\n" + errorMsg);
                     return 1;
                 }
             }

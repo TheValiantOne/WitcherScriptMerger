@@ -12,11 +12,13 @@ using WitcherScriptMerger.LoadOrder;
 
 namespace WitcherScriptMerger.Forms
 {
-    partial class MainForm : Form
+    partial class MainForm : Form, IMergeNotifier
     {
         #region Members
 
         public string GameDirectorySetting => txtGameDir.Text;
+
+        public bool IsInteractive => true;
 
         ModFileIndex _modIndex = null;
 

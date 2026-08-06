@@ -152,7 +152,7 @@ namespace WitcherScriptMerger.LoadOrder
 
         void ShowWarningForMalformedFile(string reason)
         {
-            Program.MainForm.ShowMessage(
+            Program.Notifier.ShowMessage(
                 "Your mods.settings file is invalid.\n\n" + reason,
                 "Invalid Load Order File",
                 System.Windows.Forms.MessageBoxButtons.OK,

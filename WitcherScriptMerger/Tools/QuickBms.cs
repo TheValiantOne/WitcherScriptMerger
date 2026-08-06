@@ -34,7 +34,7 @@ namespace WitcherScriptMerger.Tools
                         output = output.Substring(outputStart);
                         errorMsg += "\n\n" + output;
                     }
-                    Program.MainForm.ShowError(errorMsg);
+                    Program.Notifier.ShowError(errorMsg);
                     return 1;
                 }
 
@@ -69,17 +69,17 @@ namespace WitcherScriptMerger.Tools
         {
             if (!File.Exists(bundlePath))
             {
-                Program.MainForm.ShowError("Can't find bundle file:\n\n" + bundlePath, "Missing Bundle");
+                Program.Notifier.ShowError("Can't find bundle file:\n\n" + bundlePath, "Missing Bundle");
                 return false;
             }
             if (!File.Exists(ExePath))
             {
-                Program.MainForm.ShowError("Can't find QuickBMS at this location:\n\n" + ExePath, "Missing QuickBMS");
+                Program.Notifier.ShowError("Can't find QuickBMS at this location:\n\n" + ExePath, "Missing QuickBMS");
                 return false;
             }
             if (!File.Exists(PluginPath))
             {
-                Program.MainForm.ShowError("Can't find QuickBMS plugin at this location:\n\n" + PluginPath, "Missing QuickBMS Plugin");
+                Program.Notifier.ShowError("Can't find QuickBMS plugin at this location:\n\n" + PluginPath, "Missing QuickBMS Plugin");
                 return false;
             }
             return true;

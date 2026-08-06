@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Configuration;
 using System.Reflection;
-using System.Windows.Forms;
 
 namespace WitcherScriptMerger
 {
@@ -28,11 +27,7 @@ namespace WitcherScriptMerger
 
             if (!CachedConfig.HasFile)
             {
-                MessageBox.Show(
-                    "Config file is missing.",
-                    "Script Merger Error",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Error);
+                Program.Notifier.ShowError("Config file is missing.", "Script Merger Error");
                 Environment.Exit(1);
             }
         }
@@ -61,7 +56,7 @@ namespace WitcherScriptMerger
                     return (T)valueObject;
                 }
 
-                Program.MainForm.ShowError($"Config file doesn't exist:\n\n{CachedConfig.FilePath}");
+                Program.Notifier.ShowError($"Config file doesn't exist:\n\n{CachedConfig.FilePath}");
                 return default(T);
             }
             catch
@@ -77,7 +72,7 @@ namespace WitcherScriptMerger
                 if (CachedConfig.HasFile)
                     return CachedConfig.AppSettings.Settings[key].Value;
 
-                Program.MainForm.ShowError($"Config file doesn't exist:\n\n{CachedConfig.FilePath}");
+                Program.Notifier.ShowError($"Config file doesn't exist:\n\n{CachedConfig.FilePath}");
                 return string.Empty;
             }
             catch
@@ -94,7 +89,7 @@ namespace WitcherScriptMerger
             }
             catch (Exception ex)
             {
-                Program.MainForm.ShowError($"Failed to save config due to error:\n\n{ex.Message}");
+                Program.Notifier.ShowError($"Failed to save config due to error:\n\n{ex.Message}");
             }
         }
     }

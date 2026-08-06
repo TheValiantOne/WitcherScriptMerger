@@ -15,7 +15,7 @@ namespace WitcherScriptMerger
         public static string VanillaScriptBase = Path.Combine("content", "content0", "scripts");
         public static string BundleBase = "content";
 
-        public static string GameDirectory => Program.MainForm.GameDirectorySetting;
+        public static string GameDirectory => Program.Settings.Get("GameDirectory");
 
         public static string GameExe => Path.Combine(GameDirectory, "bin", "x64", "witcher3.exe");
 
@@ -67,7 +67,7 @@ namespace WitcherScriptMerger
         {
             if (!Directory.Exists(ModsDirectory))
             {
-                Program.MainForm.ShowMessage(
+                Program.Notifier.ShowMessage(
                     (!IsModsDirectoryDerived
                      ? "Can't find the Mods directory specified in the config file."
                      : "Can't find Mods directory in the specified game directory."));
@@ -80,7 +80,7 @@ namespace WitcherScriptMerger
         {
             if (!Directory.Exists(ScriptsDirectory))
             {
-                Program.MainForm.ShowMessage(
+                Program.Notifier.ShowMessage(
                     (!IsScriptsDirectoryDerived
                      ? "Can't find the Scripts directory specified in the config file."
                      : "Can't find \\content\\content0\\scripts directory in the specified game directory.") +
@@ -94,7 +94,7 @@ namespace WitcherScriptMerger
         {
             if (!Directory.Exists(BundlesDirectory))
             {
-                Program.MainForm.ShowMessage("Can't find 'content' directory in the specified game directory.");
+                Program.Notifier.ShowMessage("Can't find 'content' directory in the specified game directory.");
                 return false;
             }
             return true;
@@ -114,7 +114,7 @@ namespace WitcherScriptMerger
             var mergedModName = Program.Settings.Get("MergedModName");
             if (string.IsNullOrWhiteSpace(mergedModName))
             {
-                Program.MainForm.ShowMessage("The MergedModName setting isn't configured in the .config file.");
+                Program.Notifier.ShowMessage("The MergedModName setting isn't configured in the .config file.");
                 return null;
             }
             if (mergedModName.Length > 64)
@@ -138,7 +138,7 @@ namespace WitcherScriptMerger
 
         static bool ConfirmInvalidModName(string mergedModName)
         {
-            return (DialogResult.Yes == Program.MainForm.ShowMessage(
+            return (DialogResult.Yes == Program.Notifier.ShowMessage(
                 "The Witcher 3 won't load the merged file if the mod name isn't \"mod\" followed by numbers, letters, or underscores."
                 + "\n\nUse this name anyway?\n" + mergedModName
                 + "\n\nTo change the name: Click No, then edit \"MergedModName\" in the .config file.",

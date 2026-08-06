@@ -10,6 +10,10 @@ namespace WitcherScriptMerger
 {
     static class Program
     {
+        // Defaults to the headless implementation so it's safe to use from the
+        // very first line of Main() - the GUI path swaps it out for MainForm
+        // once constructed. See CLAUDE.md's IMergeNotifier section.
+        public static IMergeNotifier Notifier = new HeadlessMergeNotifier();
         public static AppSettings Settings = new AppSettings();
         public static CustomLoadOrder LoadOrder = null;
         public static MergeInventory Inventory = null;
@@ -42,16 +46,13 @@ namespace WitcherScriptMerger
             }
 
             MainForm = new MainForm();
+            Notifier = MainForm;
             Application.Run(MainForm);
         }
 
         static void ShowLaunchFailure(string message)
         {
-            MessageBox.Show(
-                $"Launch failure: {message}",
-                "Script Merger Error",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Error);
+            Notifier.ShowError($"Launch failure: {message}", "Script Merger Error");
         }
 
         public static bool TryOpenFile(string path)
