@@ -39,6 +39,12 @@ namespace WitcherScriptMerger.Inventory
                 };
         }
 
+        public class HeadlessMergeSummary
+        {
+            public List<string> Merged { get; } = new List<string>();
+            public List<string> Skipped { get; } = new List<string>();
+        }
+
         #endregion
 
         #region Members
@@ -206,6 +212,141 @@ namespace WitcherScriptMerger.Inventory
                 ProgressInfo.CurrentAction = "Adding script merge to inventory";
                 _inventory.Merges.Add(merge);
             }
+        }
+
+        // Headless equivalent of MergeFlatFileNode, driven by plain ModFile/FileHash
+        // data (FileIndex/ModFileIndex.Conflicts) instead of ConflictTree's TreeNodes -
+        // those already carry everything needed (relative path, category, per-mod name
+        // and hash), so no TreeNode is ever constructed for this path. Bundle-packed
+        // conflicts are skipped for now (Categories.BundleText isn't in the filter
+        // below); that path lands separately once this one's proven out.
+        public HeadlessMergeSummary MergeConflictsHeadless(
+            IEnumerable<ModFile> conflicts,
+            string mergedModName,
+            IReadOnlyDictionary<string, string[]> orderOverrides)
+        {
+            var summary = new HeadlessMergeSummary();
+
+            foreach (var conflict in conflicts.Where(c => c.Category == Categories.Script || c.Category == Categories.Xml))
+            {
+                var orderedNames = ResolveMergeOrder(conflict, orderOverrides);
+                if (orderedNames == null)
+                {
+                    summary.Skipped.Add(conflict.RelativePath);
+                    continue;
+                }
+
+                var isNew = false;
+                var merge = _inventory.Merges.FirstOrDefault(m => m.RelativePath.EqualsIgnoreCase(conflict.RelativePath));
+                if (merge == null)
+                {
+                    isNew = true;
+                    merge = new Merge
+                    {
+                        RelativePath = conflict.RelativePath,
+                        MergedModName = mergedModName
+                    };
+                }
+
+                var firstHash = conflict.Mods.First(h => h.Name.EqualsIgnoreCase(orderedNames[0]));
+                var source1 = MergeSource.FromFlatFile(new FileInfo(conflict.GetModFile(orderedNames[0])), firstHash);
+
+                var relPath = Paths.GetRelativePath(
+                    source1.TextFile.FullName,
+                    Path.Combine(Paths.ModsDirectory, source1.Name));
+
+                _outputPath = Path.Combine(Paths.ModsDirectory, mergedModName, relPath);
+
+                if (File.Exists(_outputPath) && !ConfirmOutputOverwrite(_outputPath))
+                {
+                    summary.Skipped.Add(conflict.RelativePath);
+                    continue;
+                }
+
+                _vanillaFile = new FileInfo(conflict.GetVanillaFile());
+
+                var fullyMerged = true;
+                for (int i = 1; i < orderedNames.Length; ++i)
+                {
+                    var hash = conflict.Mods.First(h => h.Name.EqualsIgnoreCase(orderedNames[i]));
+                    var source2 = MergeSource.FromFlatFile(new FileInfo(conflict.GetModFile(orderedNames[i])), hash);
+
+                    var mergedFile = MergeTextHeadless(merge, source1, source2);
+                    if (mergedFile != null)
+                    {
+                        source1 = MergeSource.FromFlatFile(mergedFile, null);
+                    }
+                    else
+                    {
+                        fullyMerged = false;
+                        break;
+                    }
+                }
+
+                if (fullyMerged)
+                {
+                    if (isNew && merge.Mods.Count > 1)
+                        _inventory.Merges.Add(merge);
+                    summary.Merged.Add(conflict.RelativePath);
+                }
+                else
+                {
+                    summary.Skipped.Add(conflict.RelativePath);
+                }
+            }
+
+            CleanUpTempFiles();
+            CleanUpEmptyDirectories();
+
+            return summary;
+        }
+
+        // Explicit order-file entries win; conflicts not listed fall back to the same
+        // LoadOrderComparer ordering ConflictTree's default sort already uses
+        // (Controls/SMTreeSorter.cs), so headless behavior matches the GUI's default
+        // without needing every conflict spelled out.
+        string[] ResolveMergeOrder(ModFile conflict, IReadOnlyDictionary<string, string[]> orderOverrides)
+        {
+            if (orderOverrides != null && orderOverrides.TryGetValue(conflict.RelativePath, out var explicitOrder))
+            {
+                var unknown = explicitOrder.Where(name => !conflict.ContainsMod(name)).ToArray();
+                if (unknown.Any())
+                {
+                    Program.Notifier.ShowError(
+                        $"Order file lists unknown mod(s) for {conflict.RelativePath}: {string.Join(", ", unknown)}");
+                    return null;
+                }
+                return explicitOrder;
+            }
+
+            return conflict.Mods
+                .Select(h => h.Name)
+                .OrderBy(name => name, new LoadOrderComparer())
+                .ToArray();
+        }
+
+        FileInfo MergeTextHeadless(Merge merge, MergeSource source1, MergeSource source2)
+        {
+            ProgressInfo.CurrentAction = $"Merging {source1.Name} && {source2.Name}";
+
+            var result = KDiff3.RunHeadless(source1, source2, _vanillaFile, _outputPath);
+
+            if (result != KDiff3.HeadlessResult.AutoSolved)
+                return null;
+
+            if (!source1.TextFile.FullName.EqualsIgnoreCase(_outputPath)
+                && !source1.TextFile.FullName.StartsWithIgnoreCase(Paths.MergedBundleContentAbsolute))
+            {
+                _inventory.AddModToMerge(source1, merge);
+            }
+
+            if (!source2.TextFile.FullName.EqualsIgnoreCase(_outputPath)
+                && !source2.TextFile.FullName.StartsWithIgnoreCase(Paths.MergedBundleContentAbsolute))
+            {
+                _inventory.AddModToMerge(source2, merge);
+            }
+
+            return new FileInfo(_outputPath);
         }
 
         void MergeBundleFileNode(TreeNode fileNode, TreeNode[] checkedModNodes, Merge merge, bool isNew)
