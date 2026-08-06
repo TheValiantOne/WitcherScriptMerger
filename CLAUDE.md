@@ -6,12 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Script Merger for The Witcher 3 — a Windows desktop tool (WinForms, not WPF) that detects and merges conflicting mod script files. It scans a mod folder, finds `.ws`/`.xml` files (including inside `.bundle` packages) that multiple mods modify, and drives a 3-way merge (vanilla + mod1 + mod2) via the external tool KDiff3. `.bundle` package contents are unpacked with QuickBMS and repacked with wcc_lite.
 
-This is a fork of the upstream `AnotherSymbiote/WitcherScriptMerger` repo (still the `origin` remote — no separate fork exists yet), currently mid-modernization. See `HANDOFF.md` at the repo root for the full rationale behind the fork, detailed gotchas hit during the .NET modernization, and the current list of open goals (whitespace/diff-noise in KDiff3 merges, a possible CLI mode, dependency-packaging/licensing decisions) — read it before picking up follow-on work in this repo.
+This is a fork of the upstream `AnotherSymbiote/WitcherScriptMerger` repo (still the `origin` remote — no separate fork exists yet), currently mid-modernization. See `HANDOFF.md` at the repo root for the full rationale behind the fork and detailed gotchas hit during the .NET modernization — read it before picking up follow-on work in this repo. Of its original list of open goals, whitespace/diff-noise and a CLI mode (see "CLI mode" below) are done; dependency-packaging/licensing decisions are still open.
 
 ## Build & run
 
 - Build: `dotnet build WitcherScriptMerger.sln` from the repo root.
-- Run: launch the built `WitcherScriptMerger.exe`, or `dotnet run --project WitcherScriptMerger/WitcherScriptMerger.csproj`. At startup the app validates `KDiff3Path`/`QuickBmsPath`/`QuickBmsPluginPath`/`WccLitePath` from `App.config` (`Paths.ValidateDependencyPaths` in `WitcherScriptMerger/Paths.cs`) and shows a blocking `DependencyForm` if any are missing — the external binaries (KDiff3, QuickBMS, wcc_lite) are **not** in source control (see "External tool dependencies" below), so a fresh checkout won't run end-to-end without sourcing them separately.
+- Run (GUI, no args): launch the built `WitcherScriptMerger.exe`, or `dotnet run --project WitcherScriptMerger/WitcherScriptMerger.csproj`. At startup the app validates `KDiff3Path`/`QuickBmsPath`/`QuickBmsPluginPath`/`WccLitePath` from `App.config` (`Paths.ValidateDependencyPaths` in `WitcherScriptMerger/Paths.cs`) and shows a blocking `DependencyForm` if any are missing — the external binaries (KDiff3, QuickBMS, wcc_lite) are **not** in source control (see "External tool dependencies" below), so a fresh checkout won't run end-to-end without sourcing them separately.
+- Run (CLI, headless): `WitcherScriptMerger.exe merge [--order-file <path.json>]` — see "CLI mode" below. Any arguments at all route to the CLI path instead of the GUI.
 - Single project, single `.sln` — there is no separate class library to build independently.
 
 ### Tests
@@ -20,20 +21,24 @@ There is no test project in this repo (`dotnet test` has nothing to run). The pr
 
 ## Architecture
 
-Single WinForms project (`WitcherScriptMerger/WitcherScriptMerger.csproj`, SDK-style, targets `net10.0-windows7.0`). There is no MVC/MVP split — `Forms/MainForm.cs` (~1000 lines) is a monolithic orchestrator that directly owns the tree controls, constructs `ModFileIndex`/`FileMerger`, and wires up their async callbacks. `Program.MainForm` (a static field) is used as a global service locator for dialogs (`Program.MainForm.ShowMessage/ShowError/ShowModal`) called from deep inside domain classes like `FileMerger` and `Paths` — UI and domain logic are not cleanly separated, so don't assume domain code is UI-independent when refactoring.
+Single WinForms project (`WitcherScriptMerger/WitcherScriptMerger.csproj`, SDK-style, targets `net10.0-windows7.0`). There is no MVC/MVP split — `Forms/MainForm.cs` (~1000 lines) is a monolithic orchestrator that directly owns the tree controls, constructs `ModFileIndex`/`FileMerger`, and wires up their async callbacks.
+
+Domain code (`FileMerger`, `ModFileIndex`, `CustomLoadOrder`, `Paths`, `AppSettings`, the `Tools/` wrappers) doesn't call into WinForms directly — it goes through `Program.Notifier` (an `IMergeNotifier`), which is what makes CLI mode possible. See "CLI mode" below.
 
 Folder map:
-- `Forms/` — WinForms screens: `MainForm.cs` (the hub), `OptionsForm.cs`, `DependencyForm.cs` (startup blocker if tool paths are invalid), `MergeReportForm.cs`, `PackReportForm.cs`, `PriorityPrompt.cs`, `MessageBoxManager.cs`.
+- `Forms/` — WinForms screens: `MainForm.cs` (the hub, also implements `IMergeNotifier`), `OptionsForm.cs`, `DependencyForm.cs` (startup blocker if tool paths are invalid), `MergeReportForm.cs`, `PackReportForm.cs`, `PriorityPrompt.cs`, `MessageBoxManager.cs`.
 - `Controls/` — custom `TreeView` subclasses: `SMTree.cs` (base, metadata/context-menu logic), `ConflictTree.cs` (detected conflicts), `MergeTree.cs` (existing merges), `SMTreeSorter.cs`, `ToolStripRegion.cs`.
 - `FileIndex/` — scans the mods folder and builds the conflict index: `ModFileIndex.cs` (`BuildAsync` → `Conflicts`), `ModFile.cs`, `ModFileCategory.cs`.
 - `Inventory/` — core merge domain + persistence: `FileMerger.cs`, `Merge.cs`, `MergeInventory.cs`, `FileHash.cs`, `MergeProgressInfo.cs`.
 - `LoadOrder/` — mod load-order logic: `CustomLoadOrder.cs`, `LoadOrderComparer.cs`, `LoadOrderValidator.cs`, `ModLoadSetting.cs`.
 - `Tools/` — wrappers that shell out to bundled external executables: `KDiff3.cs`, `QuickBms.cs`, `WccLite.cs`, `Hasher.cs`.
-- Root: `Program.cs` (entry point), `AppSettings.cs`, `Paths.cs`, `Extensions.cs`, `TaskbarProgress.cs`, `App.config`.
+- Root: `Program.cs` (entry point, both GUI and CLI), `AppSettings.cs`, `Paths.cs`, `Extensions.cs`, `TaskbarProgress.cs`, `IMergeNotifier.cs`, `HeadlessMergeNotifier.cs`, `App.config`.
 
 ### Startup flow (`Program.cs`)
 
-`[STAThread] Main()` → `Application.EnableVisualStyles()` → construct static `Program.Settings = new AppSettings()` (exits via MessageBox if `App.config` is missing) → `Paths.ValidateDependencyPaths()` (shows `DependencyForm` if KDiff3/QuickBMS/wcc_lite paths are invalid) → construct and `Application.Run(MainForm)`.
+Both entry points share `Program`'s static init: `Program.Notifier` defaults to `HeadlessMergeNotifier` via field initializer (before anything else, including `Settings = new AppSettings()`, can run) so any startup error is safe to report even before it's known whether this is a GUI or CLI run. `MaybeAttachConsole()` also runs as a field initializer, ahead of everything, so early failures are visible in the invoking terminal when there are CLI args.
+
+`[STAThread] Main(string[] args)`: if `args` is non-empty, hands off entirely to the CLI path (see below) and returns — the GUI is never touched. Otherwise: `Application.EnableVisualStyles()` → check `Settings.HasConfigFile` → `Paths.ValidateDependencyPaths()` (shows `DependencyForm` if KDiff3/QuickBMS/wcc_lite paths are invalid) → construct `MainForm`, reassign `Program.Notifier = MainForm`, `Application.Run(MainForm)`.
 
 ### Merge flow
 
@@ -45,6 +50,17 @@ No hand-rolled diff algorithm lives in this codebase — it's an orchestrator ar
 4. `FileMerger.MergeText` calls `Tools/KDiff3.Run(source1, source2, vanillaFile, outputPath)`, which shells out to `KDiff3.exe` (`--auto` for auto-solvable 3-way merges, or opens its GUI for manual resolution). Before building the command line, `KDiff3.Run` normalizes each input file to UTF-16LE with a BOM (matching vanilla's encoding) via `EnsureUtf16Encoding`, writing a temp copy under `Paths.TempBundleContent\Encoding\...` when a file isn't already in that encoding — see "KDiff3 input encoding" below for why.
 5. On success, `Inventory/MergeInventory.AddModToMerge` hashes the result via `Tools/Hasher` (xxHash32, `System.IO.Hashing`) and persists the merge record to `MergeInventory.xml` (`XmlSerializer`). `MergeInventory.HasResolvedConflict` re-checks these hashes on refresh to detect merges made stale by upstream mod file changes.
 6. Bundle content changes additionally go through `FileMerger.PackNewBundle` → `Tools/WccLite.PackBundle` + `GenerateMetadata` to repack `blob0.bundle`.
+
+The CLI path (`FileMerger.MergeConflictsHeadless`) is a separate, parallel orchestration over the same domain objects — see "CLI mode" below.
+
+### CLI mode
+
+`WitcherScriptMerger.exe merge [--order-file <path.json>]` merges every auto-solvable conflict without opening any window, then exits. No-args still launches the GUI unchanged; passing `merge` is what selects the CLI path in `Program.cs`.
+
+- **Orchestration**: `FileMerger.MergeConflictsHeadless(conflicts, mergedModName, orderOverrides)` iterates `ModFileIndex.Conflicts` directly — those are plain `ModFile`/`FileHash` objects (relative path, category, per-mod name and hash), so no `TreeNode`/`ConflictTree` is ever constructed for this path. `MergeFlatConflictHeadless` and `MergeBundleConflictHeadless` mirror `MergeFlatFileNode`/`MergeBundleFileNode`'s logic against that plain data instead of `TreeNode.GetMetadata()`; bundle merges reuse `GetUnpackedFiles`/`PackNewBundle` unchanged. Per-file mod order defaults to `LoadOrderComparer` (matching `ConflictTree`'s own default sort, `Controls/SMTreeSorter.cs`); the `--order-file` JSON (`{"relative\\path.ws": ["modA", "modB"]}`) overrides specific files without requiring every conflict to be listed.
+- **`IMergeNotifier`** (`IMergeNotifier.cs`, `HeadlessMergeNotifier.cs`): replaces every direct `Program.MainForm.ShowMessage/ShowError/ShowModal` call in domain code with `Program.Notifier.*`. `MainForm` implements the interface directly (its methods already matched the shape exactly, so the GUI path is behavior-identical). `HeadlessMergeNotifier` writes to the console and returns a fixed, non-destructive default for every decision: don't overwrite an existing merge output, don't use a merge name that's still conflicting, don't continue past a canceled/failed merge. This is also what fixed a real null-ref hazard in `CustomLoadOrder.Refresh()`, which used to reach `Program.MainForm` at construction time.
+- **`KDiff3.RunHeadless`**: see the "Verify KDiff3 process behavior..." compatibility constraint above for the window-persistence detection this relies on. `-o` always targets a scratch path under `Paths.TempBundleContent\HeadlessOutput\`, copied to the real output only after a confirmed clean exit — a killed process can never leave a partial file at the real path.
+- **Verification status**: the flat-file path (`Categories.Script`/`Categories.Xml`) is verified end-to-end against real conflicting files (including the encoding-mismatch scenario) and a synthetic guaranteed-conflict, in a scratch game/mods tree — never against a live install. The bundle path (`Categories.BundleText`) is code-reviewed and mirrors the proven flat-file orchestration, and its two building blocks (`GetUnpackedFiles`, `PackNewBundle`) are unchanged, already-exercised code — but it hasn't been round-tripped through a real bundle-vs-bundle conflict. If `tempbundlecontent` accumulates across many CLI runs during development, clear it between runs — one debugging session saw a single very slow run after a long buildup that didn't reproduce once it was cleared.
 
 ### Compatibility constraints
 
