@@ -113,11 +113,9 @@ namespace WitcherScriptMerger
 
         #region CLI
 
-        // "merge" is the only command for now. Bundle-packed conflicts aren't
-        // included yet (checkBundles: false below) - that's a separate pass
-        // once this flat-file path is proven out. Exit codes: 0 = every
-        // conflict merged, 1 = couldn't even start (bad args/config/deps),
-        // 2 = ran, but one or more conflicts were skipped.
+        // "merge" is the only command for now. Exit codes: 0 = every conflict
+        // merged, 1 = couldn't even start (bad args/config/deps), 2 = ran, but
+        // one or more conflicts were skipped.
         static int RunCli(string[] args)
         {
             Environment.CurrentDirectory = AppContext.BaseDirectory;
@@ -174,7 +172,7 @@ namespace WitcherScriptMerger
                 modIndex.BuildAsync(
                     Settings.Get<bool>("CheckScripts"),
                     Settings.Get<bool>("CheckXmlFiles"),
-                    checkBundles: false,
+                    Settings.Get<bool>("CheckBundleContents"),
                     (s, e) => { },
                     (s, e) => scanComplete.Set());
                 scanComplete.Wait();
