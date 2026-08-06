@@ -197,3 +197,23 @@ FakesAssemblies/
 
 # Visual Studio 6 workspace options file
 *.opt
+
+# Local-only Claude Code session/handoff notes (machine-specific paths,
+# in-progress personal task context) - not meant to be shared in the repo.
+HANDOFF*.md
+
+# Claude Code runtime state (scheduled tasks, worktrees, checkpoints, etc.)
+# Mirrors this machine's .git/info/exclude so the exclusion travels with the
+# repo instead of depending on local, unshared git config. Deliberately
+# scoped to runtime state, not a blanket .claude/ ignore - things like
+# .claude/commands/ or .claude/agents/ may be intentionally committed.
+.claude/scheduled_tasks.lock
+.claude/scheduled_tasks.json
+.claude/routines/.state/
+.claude/worktrees/
+.claude/checkpoints/
+.claude/mailbox/
+.claude/agent-registry.json
+.claude/agent-memory-local
+.claude/first-run
+.claude/assistant-daemon-state.json
