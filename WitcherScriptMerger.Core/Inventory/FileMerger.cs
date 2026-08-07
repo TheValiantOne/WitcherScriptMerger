@@ -354,22 +354,32 @@ namespace WitcherScriptMerger.Inventory
 		public HeadlessMergeSummary MergeConflictsHeadless(
 			IEnumerable<ModFile> conflicts,
 			string mergedModName,
-			IReadOnlyDictionary<string, string[]> orderOverrides)
+			IReadOnlyDictionary<string, string[]> orderOverrides,
+			bool dryRun = false)
 		{
 			var summary = new HeadlessMergeSummary();
 
 			foreach (var conflict in conflicts.Where(c =>
 				c.Category == Categories.Script || c.Category == Categories.Xml || c.Category == Categories.BundleText))
 			{
-				var orderedNames = ResolveMergeOrder(conflict, orderOverrides);
+				var orderedNames = ResolveMergeOrder(conflict, mergedModName, orderOverrides);
 				if (orderedNames == null)
 				{
 					summary.Skipped.Add(conflict.RelativePath);
 					continue;
 				}
 
+				// A dry run always merges into a throwaway record instead of one pulled
+				// from _inventory.Merges - that way nothing this pass does to `merge`
+				// (BundleName, recorded source hashes via RecordMergedSources) can ever
+				// mutate a live object still referenced by the loaded inventory, even if
+				// some other code path calls Save() later. isNew is irrelevant for a dry
+				// run since the block below that would add it to the inventory is itself
+				// skipped for dry runs.
 				var isNew = false;
-				var merge = _inventory.Merges.FirstOrDefault(m => m.RelativePath.EqualsIgnoreCase(conflict.RelativePath));
+				Merge merge = null;
+				if (!dryRun)
+					merge = _inventory.Merges.FirstOrDefault(m => m.RelativePath.EqualsIgnoreCase(conflict.RelativePath));
 				if (merge == null)
 				{
 					isNew = true;
@@ -382,8 +392,8 @@ namespace WitcherScriptMerger.Inventory
 
 				var isBundle = conflict.Category == Categories.BundleText;
 				var fullyMerged = isBundle
-					? MergeBundleConflictHeadless(conflict, merge, orderedNames)
-					: MergeFlatConflictHeadless(conflict, merge, mergedModName, orderedNames);
+					? MergeBundleConflictHeadless(conflict, merge, orderedNames, dryRun)
+					: MergeFlatConflictHeadless(conflict, merge, mergedModName, orderedNames, dryRun);
 
 				if (!fullyMerged)
 				{
@@ -391,7 +401,10 @@ namespace WitcherScriptMerger.Inventory
 					continue;
 				}
 
-				if (isNew && merge.Mods.Count > 1)
+				// Dry run never adds to the inventory or flags the bundle as needing a
+				// repack - it only reports what *would* happen, so PackNewBundle (which
+				// overwrites the real blob0.bundle) never runs for one either.
+				if (!dryRun && isNew && merge.Mods.Count > 1)
 				{
 					if (isBundle)
 					{
@@ -430,7 +443,7 @@ namespace WitcherScriptMerger.Inventory
 			return summary;
 		}
 
-		bool MergeFlatConflictHeadless(ModFile conflict, Merge merge, string mergedModName, string[] orderedNames)
+		bool MergeFlatConflictHeadless(ModFile conflict, Merge merge, string mergedModName, string[] orderedNames, bool dryRun)
 		{
 			var firstHash = conflict.Mods.First(h => h.Name.EqualsIgnoreCase(orderedNames[0]));
 			var source1 = MergeSource.FromFlatFile(new FileInfo(conflict.GetModFile(orderedNames[0])), firstHash);
@@ -438,11 +451,26 @@ namespace WitcherScriptMerger.Inventory
 			var relPath = Paths.GetRelativePath(
 				source1.TextFile.FullName,
 				Path.Combine(Paths.ModsDirectory, source1.Name));
+			var realOutputPath = Path.Combine(Paths.ModsDirectory, mergedModName, relPath);
 
-			_outputPath = Path.Combine(Paths.ModsDirectory, mergedModName, relPath);
-
-			if (File.Exists(_outputPath) && !ConfirmOutputOverwrite(_outputPath))
+			// Checked against the real would-be output path regardless of dryRun: a real
+			// run always declines to overwrite an existing output (HeadlessMergeNotifier's
+			// fixed default), so a dry run needs to predict that same "already exists,
+			// would be skipped" outcome rather than only ever reporting whether the text
+			// itself would auto-solve - otherwise a preview and the real run it's meant to
+			// predict could disagree on a conflict whose output already exists.
+			if (File.Exists(realOutputPath) && !ConfirmOutputOverwrite(realOutputPath))
 				return false;
+
+			// KDiff3 always physically writes its -o target on a successful solve - there's
+			// no "check without writing" mode - so a dry run still needs somewhere real to
+			// land. Routing it under TempBundleContent instead of the real mod output path
+			// means CleanUpTempFiles() at the end of MergeConflictsHeadless deletes it
+			// afterward, so nothing from a dry run is meant to survive past this call (best
+			// -effort, like the rest of this method's cleanup - see CleanUpTempFiles).
+			_outputPath = dryRun
+				? Path.Combine(Paths.TempBundleContent, "DryRun", conflict.RelativePath)
+				: realOutputPath;
 
 			_vanillaFile = new FileInfo(conflict.GetVanillaFile());
 
@@ -451,7 +479,7 @@ namespace WitcherScriptMerger.Inventory
 				var hash = conflict.Mods.First(h => h.Name.EqualsIgnoreCase(orderedNames[i]));
 				var source2 = MergeSource.FromFlatFile(new FileInfo(conflict.GetModFile(orderedNames[i])), hash);
 
-				var mergedFile = MergeTextHeadless(merge, source1, source2);
+				var mergedFile = MergeTextHeadless(merge, source1, source2, dryRun);
 				if (mergedFile == null)
 					return false;
 				source1 = MergeSource.FromFlatFile(mergedFile, null);
@@ -459,14 +487,24 @@ namespace WitcherScriptMerger.Inventory
 			return true;
 		}
 
-		bool MergeBundleConflictHeadless(ModFile conflict, Merge merge, string[] orderedNames)
+		bool MergeBundleConflictHeadless(ModFile conflict, Merge merge, string[] orderedNames, bool dryRun)
 		{
 			merge.BundleName = Path.GetFileName(Paths.RetrieveMergedBundlePath());
 
-			_outputPath = Path.Combine(Paths.MergedBundleContent, conflict.RelativePath);
+			var realOutputPath = Path.Combine(Paths.MergedBundleContent, conflict.RelativePath);
 
-			if (File.Exists(_outputPath) && !ConfirmOutputOverwrite(_outputPath))
+			// See the matching comment in MergeFlatConflictHeadless - same reasoning: check
+			// against the real would-be output regardless of dryRun, so a preview predicts
+			// the same "already exists, declined" outcome a real run would hit.
+			if (File.Exists(realOutputPath) && !ConfirmOutputOverwrite(realOutputPath))
 				return false;
+
+			// Rooted under TempBundleContent instead of MergedBundleContent for a dry run so
+			// its intermediate merge text can never linger there either - see the matching
+			// comment in MergeFlatConflictHeadless.
+			_outputPath = dryRun
+				? Path.Combine(Paths.TempBundleContent, "DryRun", conflict.RelativePath)
+				: realOutputPath;
 
 			_vanillaFile = null;
 
@@ -481,7 +519,7 @@ namespace WitcherScriptMerger.Inventory
 				if (!GetUnpackedFiles(conflict.RelativePath, ref source1, ref source2))
 					return false;
 
-				var mergedFile = MergeTextHeadless(merge, source1, source2);
+				var mergedFile = MergeTextHeadless(merge, source1, source2, dryRun);
 				if (mergedFile == null)
 					return false;
 				source1 = MergeSource.FromFlatFile(mergedFile, null);
@@ -493,17 +531,69 @@ namespace WitcherScriptMerger.Inventory
 		// LoadOrderComparer ordering ConflictTree's default sort already uses
 		// (Controls/SMTreeSorter.cs), so headless behavior matches the GUI's default
 		// without needing every conflict spelled out.
-		string[] ResolveMergeOrder(ModFile conflict, IReadOnlyDictionary<string, string[]> orderOverrides)
+		string[] ResolveMergeOrder(ModFile conflict, string mergedModName, IReadOnlyDictionary<string, string[]> orderOverrides)
 		{
 			if (orderOverrides != null && orderOverrides.TryGetValue(conflict.RelativePath, out var explicitOrder))
 			{
+				if (explicitOrder == null)
+				{
+					AppState.Notifier.ShowError($"Order file's mod list for {conflict.RelativePath} is null.");
+					return null;
+				}
+
 				var unknown = explicitOrder.Where(name => !conflict.ContainsMod(name)).ToArray();
 				if (unknown.Any())
 				{
 					AppState.Notifier.ShowError(
-						$"Order file lists unknown mod(s) for {conflict.RelativePath}: {string.Join(", ", unknown)}");
+						$"Order file lists unknown mod(s) for {conflict.RelativePath}: " +
+						string.Join(", ", unknown.Select(n => n ?? "(null)")));
 					return null;
 				}
+
+				var distinctCount = explicitOrder.Distinct(StringComparer.OrdinalIgnoreCase).Count();
+				if (distinctCount != explicitOrder.Length)
+				{
+					AppState.Notifier.ShowError(
+						$"Order file's mod list for {conflict.RelativePath} names the same mod more than once.");
+					return null;
+				}
+
+				// A merge needs at least a pair to actually do anything - without this,
+				// a conflict left with only one *real* source after excluding
+				// mergedModName (e.g. every other source mod's file was since removed,
+				// leaving only the previous merge output and one real mod) could pass an
+				// override naming just that one real mod: nothing "missing", no
+				// duplicate, but MergeFlatConflictHeadless's chain loop (starting at
+				// index 1) would never run, silently reporting the file as fully merged
+				// having merged nothing and written nothing.
+				if (explicitOrder.Length < 2)
+				{
+					AppState.Notifier.ShowError(
+						$"Order file's mod list for {conflict.RelativePath} must name at least two mods to merge.");
+					return null;
+				}
+
+				// Every *real* source mod must be covered - omitting one would otherwise
+				// merge an incomplete chain and still report the file as fully merged.
+				// mergedModName itself doesn't count as a required source: once a file has
+				// already been merged once, its own merged-mod folder re-enters
+				// conflict.Mods as if it were a source (scan_conflicts's own description
+				// warns clients about this), and the documented way to re-merge after a
+				// source mod's file changes is to list just the real mods again - not to
+				// also re-list the previous merge output.
+				var requiredNames = conflict.Mods
+					.Select(m => m.Name)
+					.Where(name => !name.EqualsIgnoreCase(mergedModName))
+					.ToArray();
+				var missing = requiredNames.Where(name => !explicitOrder.Any(n => n.EqualsIgnoreCase(name))).ToArray();
+				if (missing.Any())
+				{
+					AppState.Notifier.ShowError(
+						$"Order file's mod list for {conflict.RelativePath} is missing conflicting mod(s): " +
+						string.Join(", ", missing));
+					return null;
+				}
+
 				return explicitOrder;
 			}
 
@@ -513,7 +603,7 @@ namespace WitcherScriptMerger.Inventory
 				.ToArray();
 		}
 
-		FileInfo MergeTextHeadless(Merge merge, MergeSource source1, MergeSource source2)
+		FileInfo MergeTextHeadless(Merge merge, MergeSource source1, MergeSource source2, bool dryRun)
 		{
 			ProgressInfo.CurrentAction = $"Merging {source1.Name} && {source2.Name}";
 
@@ -522,7 +612,12 @@ namespace WitcherScriptMerger.Inventory
 			if (result != MergeEngineResult.AutoSolved)
 				return null;
 
-			RecordMergedSources(merge, source1, source2);
+			// Dry run only needs the auto-solve verdict above. `merge` is always a
+			// throwaway object for a dry run (see MergeConflictsHeadless), so skipping
+			// this is a second, independent guard rather than the only thing preventing a
+			// recorded-hash mutation from reaching the loaded inventory.
+			if (!dryRun)
+				RecordMergedSources(merge, source1, source2);
 
 			return new FileInfo(_outputPath);
 		}

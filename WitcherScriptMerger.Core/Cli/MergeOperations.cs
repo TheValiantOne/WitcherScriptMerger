@@ -29,13 +29,14 @@ namespace WitcherScriptMerger.Cli
 			MergeInventory inventory,
 			IEnumerable<ModFile> conflicts,
 			string mergedModName,
-			IReadOnlyDictionary<string, string[]> orderOverrides)
+			IReadOnlyDictionary<string, string[]> orderOverrides,
+			bool dryRun = false)
 		{
 			// AppState.MergeEngine is supplied once by the host project at startup
 			// (Program.cs) - see Tools/IMergeEngine.cs for why Core can't construct
 			// its one real implementation (KDiff3MergeEngine) itself.
 			var merger = new FileMerger(inventory, AppState.MergeEngine);
-			return merger.MergeConflictsHeadless(conflicts, mergedModName, orderOverrides);
+			return merger.MergeConflictsHeadless(conflicts, mergedModName, orderOverrides, dryRun);
 		}
 	}
 }

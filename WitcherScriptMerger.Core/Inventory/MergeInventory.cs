@@ -33,7 +33,13 @@ namespace WitcherScriptMerger.Inventory
 			Merges.CollectionChanged += Merges_CollectionChanged;
 		}
 
-		public static MergeInventory Load(string path)
+		// allowSave gates AddMissingHashes' own auto-heal Save() below - a caller previewing
+		// via merge_conflicts(dryRun: true) needs a guarantee that Load() itself can never
+		// write to MergeInventory.xml, even when an older-schema file is missing hashes and
+		// would otherwise get silently backfilled and saved as a side effect of just loading
+		// it. Every other caller (the `merge` CLI verb, scan_conflicts, list_merges, the GUI)
+		// keeps the previous default (true) unchanged.
+		public static MergeInventory Load(string path, bool allowSave = true)
 		{
 			MergeInventory inventory;
 			try
@@ -44,7 +50,7 @@ namespace WitcherScriptMerger.Inventory
 					inventory = (MergeInventory)_serializer.Deserialize(stream);
 				}
 
-				AddMissingHashes(inventory);
+				AddMissingHashes(inventory, allowSave);
 			}
 			catch
 			{
@@ -127,7 +133,7 @@ namespace WitcherScriptMerger.Inventory
 		}
 
 		// Adds file hashes to old inventories that don't have them
-		static void AddMissingHashes(MergeInventory inventory)
+		static void AddMissingHashes(MergeInventory inventory, bool allowSave)
 		{
 			var anyMissing = false;
 
@@ -143,7 +149,7 @@ namespace WitcherScriptMerger.Inventory
 				}
 			}
 
-			if (anyMissing)
+			if (anyMissing && allowSave)
 				inventory.Save();
 		}
 	}
