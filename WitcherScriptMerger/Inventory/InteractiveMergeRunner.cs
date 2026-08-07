@@ -88,7 +88,6 @@ namespace WitcherScriptMerger.Inventory
 				IsBundle = isBundle,
 				VanillaFilePath = isBundle ? null : fileNode.GetMetadata().FilePath,
 				OrderedSources = orderedSources,
-				OrderedModNames = checkedModNodes.Select(modNode => modNode.Text).ToArray(),
 			};
 		}
 

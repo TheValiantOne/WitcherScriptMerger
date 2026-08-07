@@ -30,8 +30,14 @@
 		RetryCancel,
 	}
 
-	// Mirrors the subset of MessageBoxIcon actually used at real call sites.
-	public enum NotifyIcon
+	// Mirrors the subset of MessageBoxIcon actually used at real call sites. Deliberately
+	// NOT named "NotifyIcon": this type lives in the root WitcherScriptMerger namespace,
+	// which every host-project file under WitcherScriptMerger.Forms/.Controls/etc. can
+	// already see without a `using` (nested-namespace lookup) - naming it NotifyIcon
+	// would silently shadow System.Windows.Forms.NotifyIcon (the tray-icon control
+	// class) for any unqualified reference in host code, since an enclosing-namespace
+	// type wins over a using-imported one in C#'s simple-name resolution.
+	public enum DialogIcon
 	{
 		None,
 		Warning,

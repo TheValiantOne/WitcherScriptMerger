@@ -156,7 +156,7 @@ namespace WitcherScriptMerger.LoadOrder
 				"Your mods.settings file is invalid.\n\n" + reason,
 				"Invalid Load Order File",
 				NotifyButtons.OK,
-				NotifyIcon.Warning);
+				DialogIcon.Warning);
 		}
 
 		public void Save()

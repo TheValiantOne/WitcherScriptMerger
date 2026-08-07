@@ -8,12 +8,11 @@ namespace WitcherScriptMerger
 	// never hang waiting for a prompt nobody is watching.
 	class HeadlessMergeNotifier : IMergeNotifier
 	{
-		public bool IsInteractive => false;
-
 		public NotifyResult ShowMessage(string text,
 			string title = "",
 			NotifyButtons buttons = NotifyButtons.OK,
-			NotifyIcon icon = NotifyIcon.None)
+			DialogIcon icon = DialogIcon.None,
+			NotifyResult defaultResult = NotifyResult.None)
 		{
 			Write(text, title, icon);
 
@@ -31,16 +30,16 @@ namespace WitcherScriptMerger
 
 		public NotifyResult ShowError(string text, string title = "Error")
 		{
-			Write(text, title, NotifyIcon.Error);
+			Write(text, title, DialogIcon.Error);
 			return NotifyResult.OK;
 		}
 
-		static void Write(string text, string title, NotifyIcon icon)
+		static void Write(string text, string title, DialogIcon icon)
 		{
 			var prefix = string.IsNullOrEmpty(title) ? "WSM" : title;
 			var line = $"[{prefix}] {text}";
 
-			if (icon == NotifyIcon.Error || icon == NotifyIcon.Warning || icon == NotifyIcon.Exclamation)
+			if (icon == DialogIcon.Error || icon == DialogIcon.Warning || icon == DialogIcon.Exclamation)
 				Console.Error.WriteLine(line);
 			else
 				Console.WriteLine(line);

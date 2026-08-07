@@ -64,18 +64,19 @@ namespace WitcherScriptMerger.Inventory
 
 		// One file's interactive merge request, extracted by the host project's
 		// InteractiveMergeRunner from checked TreeNodes so this class never sees a
-		// TreeNode. OrderedModNames is carried explicitly rather than re-derived from
-		// OrderedSources[i].Name (MergeSource.Name goes through
-		// ModFile.GetModNameFromPath, which returns Paths.MergedBundleContent instead
-		// of a real mod name once a source is an intermediate bundle-merge result, not
-		// an original per-mod file).
+		// TreeNode. OrderedSources[i].Name is only read (via the ConfirmRemainingConflict
+		// gate below) before any merging starts for this file, while every element is
+		// still an original per-mod source - MergeFlatFileInteractive/
+		// MergeBundleFileInteractive only ever reassign a local loop variable to an
+		// intermediate merge result, never an element of this array, so
+		// ModFile.GetModNameFromPath's Paths.MergedBundleContent fallback (for a source
+		// that isn't an original per-mod file) never applies at that read site.
 		public class InteractiveMergeRequest
 		{
 			public string RelativePath;
 			public bool IsBundle;
 			public string VanillaFilePath;  // null for bundle-category files
 			public MergeSource[] OrderedSources;
-			public string[] OrderedModNames;
 		}
 
 		// Handed to OnMergeReport after each successful interactive pairwise text
@@ -141,7 +142,7 @@ namespace WitcherScriptMerger.Inventory
 				ProgressInfo.CurrentFileNum = i + 1;
 				ProgressInfo.CurrentAction = "Starting merge";
 
-				if (file.OrderedModNames.Any(name => (new LoadOrderComparer()).Compare(name, _mergedModName) < 0) &&
+				if (file.OrderedSources.Any(source => (new LoadOrderComparer()).Compare(source.Name, _mergedModName) < 0) &&
 					!ConfirmRemainingConflict(_mergedModName))
 					continue;
 
@@ -314,7 +315,7 @@ namespace WitcherScriptMerger.Inventory
 					"Use this name anyway?",
 				"Merged Mod Name Conflict",
 				NotifyButtons.YesNo,
-				NotifyIcon.Exclamation));
+				DialogIcon.Exclamation));
 		}
 
 		// Returns false when the caller should stop trying further merges for this
@@ -329,7 +330,7 @@ namespace WitcherScriptMerger.Inventory
 				msg += $"\n\nContinue with {remainingMergesForFile} remaining merge{remainingMergesForFile.GetPluralS()} for file {fileName}?";
 				buttons = NotifyButtons.YesNo;
 			}
-			var result = AppState.Notifier.ShowMessage(msg, "Skipped Merge", buttons, NotifyIcon.Information);
+			var result = AppState.Notifier.ShowMessage(msg, "Skipped Merge", buttons, DialogIcon.Information);
 			if (result == NotifyResult.No)
 			{
 				ProgressInfo.CurrentMergeNum += remainingMergesForFile;
@@ -543,7 +544,7 @@ namespace WitcherScriptMerger.Inventory
 				"The output file below already exists! Overwrite?\n\n" + outputPath,
 				"Overwrite?",
 				NotifyButtons.YesNo,
-				NotifyIcon.Exclamation));
+				DialogIcon.Exclamation));
 		}
 
 		bool GetUnpackedFiles(string contentRelativePath, ref MergeSource source1, ref MergeSource source2)
@@ -650,7 +651,7 @@ namespace WitcherScriptMerger.Inventory
 					"Non-critical error: Failed to delete temporary unpacked bundle content.\n\n" + ex.Message,
 					"Error",
 					NotifyButtons.OK,
-					NotifyIcon.Warning);
+					DialogIcon.Warning);
 			}
 		}
 
@@ -670,7 +671,7 @@ namespace WitcherScriptMerger.Inventory
 					"Non-critical error: Failed to delete empty Merged Bundle Content directories.\n\n" + ex.Message,
 					"Error",
 					NotifyButtons.OK,
-					NotifyIcon.Warning);
+					DialogIcon.Warning);
 			}
 		}
 

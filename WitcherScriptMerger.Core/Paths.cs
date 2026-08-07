@@ -57,7 +57,12 @@ namespace WitcherScriptMerger
 		// KDiff3's own exe-path check goes through AppState.MergeEngine rather than a
 		// direct reference to Tools/KDiff3.cs, which stays in the host project for
 		// its Win32 P/Invoke and so can't be referenced from Core - see
-		// Tools/IMergeEngine.cs.
+		// Tools/IMergeEngine.cs. Like AppState.Notifier/Settings, this relies on the
+		// host having set AppState.MergeEngine before calling in - true for the one
+		// real entry point (Program.Main, first line) but not enforced by the type
+		// system; a null MergeEngine here reads as "dependency missing" rather than
+		// "not initialized yet", which could be a confusing message if that
+		// invariant is ever broken by a future entry point.
 		public static bool ValidateDependencyPaths()
 		{
 			return (AppState.MergeEngine != null && AppState.MergeEngine.ValidateExePath() &&
@@ -147,7 +152,7 @@ namespace WitcherScriptMerger
 				+ "\n\nTo change the name: Click No, then edit \"MergedModName\" in the .config file.",
 				"Warning",
 				NotifyButtons.YesNo,
-				NotifyIcon.Exclamation));
+				DialogIcon.Exclamation));
 		}
 	}
 }

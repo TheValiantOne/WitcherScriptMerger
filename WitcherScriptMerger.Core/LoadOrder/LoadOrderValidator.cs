@@ -29,11 +29,13 @@ namespace WitcherScriptMerger.LoadOrder
 
 		// Routed through IMergeNotifier rather than a direct MessageBox.Show(...) call
 		// (as this used before the Core/host project split) since Core can't reference
-		// System.Windows.Forms at all. This does mean losing two purely cosmetic
-		// touches the direct call had: MessageBoxManager's "Ne&ver" caption on the
-		// Cancel button (shown as plain "Cancel" now) and defaulting focus to the No
-		// button - both acceptable per the Core split's design notes; see the PR
-		// description.
+		// System.Windows.Forms at all. This does lose one purely cosmetic touch the
+		// direct call had - MessageBoxManager's "Ne&ver" caption on the Cancel button
+		// (shown as plain "Cancel" now) - but NOT the safe default-button focus: that's
+		// preserved via IMergeNotifier.ShowMessage's defaultResult parameter, added
+		// specifically to keep an accidental Enter/Space keypress from silently
+		// rewriting the user's real mods.settings file the way it would have without
+		// this. See the PR description.
 		static NotifyResult PromptToPrioritizeMergedMod(string modsSettingsPath)
 		{
 			return AppState.Notifier.ShowMessage(
@@ -42,7 +44,8 @@ namespace WitcherScriptMerger.LoadOrder
 				"Would you like Script Merger to modify your custom load order so that your merged files have top priority?",
 				"Custom Load Order Problem",
 				NotifyButtons.YesNoCancel,
-				NotifyIcon.Exclamation);
+				DialogIcon.Exclamation,
+				NotifyResult.No);
 		}
 
 		static void PrioritizeMergedMod(CustomLoadOrder loadOrder, ModLoadSetting mergedModSetting)

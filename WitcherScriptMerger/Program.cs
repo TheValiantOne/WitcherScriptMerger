@@ -25,6 +25,18 @@ namespace WitcherScriptMerger
 		// invoking terminal instead of written to an unattached console.
 		static readonly bool _consoleAttached = MaybeAttachConsole();
 
+		// Explicit (empty) static constructor: without one, the C# compiler marks
+		// this class `beforefieldinit`, under which the CLR is free to defer running
+		// _consoleAttached's initializer until Program's own static fields are first
+		// touched - Main() itself no longer counts, since Notifier/Settings/LoadOrder/
+		// Inventory became pass-through properties to AppState (see below) rather than
+		// fields, so nothing in Main() necessarily touches a field of this class at
+		// all. Confirmed empirically with a minimal repro mirroring this exact shape:
+		// without this constructor, the field initializer's side effect (here,
+		// MaybeAttachConsole()) never ran at all during a normal Main() invocation.
+		// Do not remove this without re-verifying that repro.
+		static Program() { }
+
 		// Notifier/Settings/LoadOrder/Inventory live in Core's AppState now, not here -
 		// domain code that moved to Core (Paths, FileMerger, Cli/MergeOperations,
 		// Mcp/WsmMcpTools, ...) needs them, and Core can never reference this host

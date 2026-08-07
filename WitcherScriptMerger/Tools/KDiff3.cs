@@ -41,7 +41,7 @@ namespace WitcherScriptMerger.Tools
 						"You should carefully inspect this merge, because KDiff3's auto-solving behavior KEEPS changes from the previous version of the mod file that have been REMOVED in the new version.",
 						"Warning",
 						NotifyButtons.OK,
-						NotifyIcon.Warning);
+						DialogIcon.Warning);
 				}
 				else
 					args += " --auto";
@@ -99,7 +99,7 @@ namespace WitcherScriptMerger.Tools
 					$"Skipped {source1.Name} + {source2.Name}: merging an updated mod file into a merge " +
 					"created with a previous version needs manual review (KDiff3's auto-solving would keep " +
 					"changes from the previous version that have been removed in the new one).",
-					"Skipped", NotifyButtons.OK, NotifyIcon.Warning);
+					"Skipped", NotifyButtons.OK, DialogIcon.Warning);
 				return HeadlessResult.NeedsManualResolution;
 			}
 			args += " --auto";
@@ -148,7 +148,7 @@ namespace WitcherScriptMerger.Tools
 					DeleteIfExists(scratchOutputPath);
 					Program.Notifier.ShowMessage(
 						$"Skipped {source1.Name} + {source2.Name}: needs manual conflict resolution.",
-						"Skipped", NotifyButtons.OK, NotifyIcon.Warning);
+						"Skipped", NotifyButtons.OK, DialogIcon.Warning);
 					return HeadlessResult.NeedsManualResolution;
 				}
 

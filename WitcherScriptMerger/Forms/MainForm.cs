@@ -18,8 +18,6 @@ namespace WitcherScriptMerger.Forms
 
 		public string GameDirectorySetting => txtGameDir.Text;
 
-		public bool IsInteractive => true;
-
 		ModFileIndex _modIndex = null;
 
 		#endregion
@@ -354,7 +352,7 @@ namespace WitcherScriptMerger.Forms
 				msg,
 				"Missing Merge Inventory File",
 				NotifyButtons.YesNo,
-				NotifyIcon.Question));
+				DialogIcon.Question));
 		}
 
 		bool ConfirmDeleteMergeForMissingMod(Merge merge, string modName)
@@ -375,7 +373,7 @@ namespace WitcherScriptMerger.Forms
 				msg,
 				"Missing Merge Inventory File",
 				NotifyButtons.YesNo,
-				NotifyIcon.Question));
+				DialogIcon.Question));
 		}
 
 		bool ConfirmDeleteMergeForDisabledMod(Merge merge, string modName)
@@ -390,7 +388,7 @@ namespace WitcherScriptMerger.Forms
 				msg,
 				"Disabled Mod in Merge",
 				NotifyButtons.YesNo,
-				NotifyIcon.Question));
+				DialogIcon.Question));
 		}
 
 		private DialogResult PromptToDeleteForChangedHash(Merge merge, string modFilePath, string modName)
@@ -880,33 +878,35 @@ namespace WitcherScriptMerger.Forms
 		#region Cross-thread Operations
 
 		// IMergeNotifier is defined in Core against neutral NotifyResult/NotifyButtons/
-		// NotifyIcon types (Core can't reference System.Windows.Forms at all - see
+		// DialogIcon types (Core can't reference System.Windows.Forms at all - see
 		// IMergeNotifier.cs) - this translates to/from the real WinForms MessageBox
 		// around the actual MessageBox.Show(...) call.
 		public NotifyResult ShowMessage(string text,
 			string title = "",
 			NotifyButtons buttons = NotifyButtons.OK,
-			NotifyIcon icon = NotifyIcon.None)
+			DialogIcon icon = DialogIcon.None,
+			NotifyResult defaultResult = NotifyResult.None)
 		{
 			this.ActivateSafely();
 
 			var nativeButtons = ToNative(buttons);
 			var nativeIcon = ToNative(icon);
+			var nativeDefault = ToNativeDefaultButton(buttons, defaultResult);
 
 			if (this.InvokeRequired)
 			{
 				return ToNeutral((DialogResult)this.Invoke(new Func<DialogResult>(
-					() => { return MessageBox.Show(this, text, title, nativeButtons, nativeIcon); })));
+					() => { return MessageBox.Show(this, text, title, nativeButtons, nativeIcon, nativeDefault); })));
 			}
 			else
 			{
-				return ToNeutral(MessageBox.Show(this, text, title, nativeButtons, nativeIcon));
+				return ToNeutral(MessageBox.Show(this, text, title, nativeButtons, nativeIcon, nativeDefault));
 			}
 		}
 
 		public NotifyResult ShowError(string text, string title = "Error")
 		{
-			return ShowMessage(text, title, NotifyButtons.OK, NotifyIcon.Error);
+			return ShowMessage(text, title, NotifyButtons.OK, DialogIcon.Error);
 		}
 
 		// Not part of IMergeNotifier - see IMergeNotifier.cs for why ShowModal was
@@ -958,17 +958,53 @@ namespace WitcherScriptMerger.Forms
 			};
 		}
 
-		static MessageBoxIcon ToNative(NotifyIcon icon)
+		static MessageBoxIcon ToNative(DialogIcon icon)
 		{
 			return icon switch
 			{
-				NotifyIcon.None => MessageBoxIcon.None,
-				NotifyIcon.Warning => MessageBoxIcon.Warning,
-				NotifyIcon.Error => MessageBoxIcon.Error,
-				NotifyIcon.Exclamation => MessageBoxIcon.Exclamation,
-				NotifyIcon.Information => MessageBoxIcon.Information,
-				NotifyIcon.Question => MessageBoxIcon.Question,
+				DialogIcon.None => MessageBoxIcon.None,
+				DialogIcon.Warning => MessageBoxIcon.Warning,
+				DialogIcon.Error => MessageBoxIcon.Error,
+				DialogIcon.Exclamation => MessageBoxIcon.Exclamation,
+				DialogIcon.Information => MessageBoxIcon.Information,
+				DialogIcon.Question => MessageBoxIcon.Question,
 				_ => MessageBoxIcon.None,
+			};
+		}
+
+		// MessageBoxDefaultButton is positional (Button1/2/3), but IMergeNotifier's
+		// callers think in terms of which *result* they want pre-focused (e.g. "No"),
+		// not which position it happens to occupy in a given button set - so this
+		// finds preferred's position within the actual button set being shown.
+		// NotifyResult.None means "no preference", which keeps WinForms' own default
+		// (Button1) exactly as every pre-existing ShowMessage call site already got.
+		static MessageBoxDefaultButton ToNativeDefaultButton(NotifyButtons buttons, NotifyResult preferred)
+		{
+			if (preferred == NotifyResult.None)
+				return MessageBoxDefaultButton.Button1;
+
+			var order = ButtonOrder(buttons);
+			var index = Array.IndexOf(order, preferred);
+			return index switch
+			{
+				1 => MessageBoxDefaultButton.Button2,
+				2 => MessageBoxDefaultButton.Button3,
+				_ => MessageBoxDefaultButton.Button1,  // index 0, or not found in this button set
+			};
+		}
+
+		// The order WinForms actually lays these buttons out left-to-right.
+		static NotifyResult[] ButtonOrder(NotifyButtons buttons)
+		{
+			return buttons switch
+			{
+				NotifyButtons.OK => new[] { NotifyResult.OK },
+				NotifyButtons.OKCancel => new[] { NotifyResult.OK, NotifyResult.Cancel },
+				NotifyButtons.AbortRetryIgnore => new[] { NotifyResult.Abort, NotifyResult.Retry, NotifyResult.Ignore },
+				NotifyButtons.YesNoCancel => new[] { NotifyResult.Yes, NotifyResult.No, NotifyResult.Cancel },
+				NotifyButtons.YesNo => new[] { NotifyResult.Yes, NotifyResult.No },
+				NotifyButtons.RetryCancel => new[] { NotifyResult.Retry, NotifyResult.Cancel },
+				_ => new[] { NotifyResult.OK },
 			};
 		}
 
