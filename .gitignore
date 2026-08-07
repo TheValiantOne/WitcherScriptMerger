@@ -217,3 +217,11 @@ HANDOFF*.md
 .claude/agent-memory-local
 .claude/first-run
 .claude/assistant-daemon-state.json
+
+# Aider's local session/cache state - same reasoning as the .claude/ block above.
+.aider*
+
+# If you're using another agentic coding tool that writes local-only runtime
+# state into this repo (session logs, caches, scratch indexes), add a scoped
+# entry here rather than committing it - see the AI-assisted development
+# section of CONTRIBUTING.md.
