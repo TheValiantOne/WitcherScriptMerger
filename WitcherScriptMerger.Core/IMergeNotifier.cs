@@ -17,15 +17,20 @@
 	// something this split made unused).
 	public interface IMergeNotifier
 	{
-		// defaultResult picks which button is focused by default when shown
-		// interactively (NotifyResult.None means "use the button set's own natural
-		// default", e.g. the leftmost button) - added specifically so a caller can
-		// request a safe answer be pre-focused for a destructive YesNoCancel-style
-		// prompt (see LoadOrderValidator.PromptToPrioritizeMergedMod), matching what a
-		// direct MessageBox.Show(..., MessageBoxDefaultButton) call could do before
-		// the Core split. Headless mode ignores it - HeadlessMergeNotifier already
-		// returns a fixed, non-destructive answer for every button set regardless of
-		// what a caller might prefer.
+		// defaultResult is the caller's own answer for "which result is safe/
+		// non-destructive for this specific prompt" - added specifically for
+		// LoadOrderValidator.PromptToPrioritizeMergedMod, whose YesNoCancel prompt
+		// has an inverted-from-usual safety shape (Cancel is the one destructive,
+		// permanent choice there, not Yes/No). NotifyResult.None means "no
+		// preference, use whatever's generically safe/natural for this button set".
+		// Both implementations honor it, not just the interactive one:
+		//  - MainForm translates it to the real MessageBoxDefaultButton (which
+		//    button is pre-focused), matching what a direct
+		//    MessageBox.Show(..., MessageBoxDefaultButton) call could do before the
+		//    Core split.
+		//  - HeadlessMergeNotifier returns it directly instead of falling through to
+		//    its own generic per-button-set guess, since only the caller actually
+		//    knows which answer is safe for a prompt like this one.
 		NotifyResult ShowMessage(string text,
 			string title = "",
 			NotifyButtons buttons = NotifyButtons.OK,

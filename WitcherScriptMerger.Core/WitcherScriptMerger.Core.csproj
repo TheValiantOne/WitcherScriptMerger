@@ -6,6 +6,12 @@
     <AssemblyName>WitcherScriptMerger.Core</AssemblyName>
     <Nullable>disable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
+    <!-- Same ruleset the host project uses (CA1801/CA1804/CA1811/CA1812/CA1823 -
+         unused parameters/locals/private types/members) - without this, the ~20
+         files that moved here from the host project during the Core/host split
+         (FileMerger, ModFileIndex, CustomLoadOrder, Paths, the Tools/ wrappers,
+         etc.) would silently drop out of dead-code analysis instead of keeping it. -->
+    <CodeAnalysisRuleSet>..\WitcherScriptMerger\DeadCodeDetection.ruleset</CodeAnalysisRuleSet>
   </PropertyGroup>
 
   <ItemGroup>

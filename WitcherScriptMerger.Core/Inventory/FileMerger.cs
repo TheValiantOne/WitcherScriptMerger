@@ -120,6 +120,19 @@ namespace WitcherScriptMerger.Inventory
 
 		public FileMerger(MergeInventory inventory, IMergeEngine mergeEngine)
 		{
+			// AppState.MergeEngine (the usual source callers pass here) defaults to
+			// null and is only ever populated by the one real entry point
+			// (Program.Main, before anything else runs) - nothing in the type system
+			// enforces that. Failing fast here with a clear message beats letting
+			// Merge()/MergeHeadless() throw an unhandled NullReferenceException from
+			// deep inside a merge the first time any future entry point (a test
+			// harness, the Linux CLI/MCP-only host planned for a later unit)
+			// constructs a FileMerger without going through that startup path first.
+			if (mergeEngine == null)
+				throw new ArgumentNullException(nameof(mergeEngine),
+					"FileMerger requires a non-null IMergeEngine. If this was constructed via " +
+					"AppState.MergeEngine, the host entry point never set it - see Tools/IMergeEngine.cs.");
+
 			_inventory = inventory;
 			MergeEngine = mergeEngine;
 			ProgressInfo = new MergeProgressInfo();
@@ -268,17 +281,7 @@ namespace WitcherScriptMerger.Inventory
 			if (result != MergeEngineResult.AutoSolved)
 				return null;
 
-			if (!source1.TextFile.FullName.EqualsIgnoreCase(_outputPath)
-				&& !source1.TextFile.FullName.StartsWithIgnoreCase(Paths.MergedBundleContentAbsolute))
-			{
-				_inventory.AddModToMerge(source1, merge);
-			}
-
-			if (!source2.TextFile.FullName.EqualsIgnoreCase(_outputPath)
-				&& !source2.TextFile.FullName.StartsWithIgnoreCase(Paths.MergedBundleContentAbsolute))
-			{
-				_inventory.AddModToMerge(source2, merge);
-			}
+			RecordMergedSources(merge, source1, source2);
 
 			OnMergeReport?.Invoke(new MergeReportData
 			{
@@ -519,6 +522,25 @@ namespace WitcherScriptMerger.Inventory
 			if (result != MergeEngineResult.AutoSolved)
 				return null;
 
+			RecordMergedSources(merge, source1, source2);
+
+			return new FileInfo(_outputPath);
+		}
+
+		#endregion
+
+		#region Shared
+
+		// Shared by MergeTextInteractive/MergeTextHeadless after a successful merge:
+		// records each source's hash into the merge record, unless that source IS the
+		// output file itself (the accumulated merge target from a previous pairwise
+		// merge in the same multi-mod chain, not a distinct mod source) or lives under
+		// MergedBundleContent (an intermediate bundle-merge byproduct, same reasoning).
+		// MergeInventory.xml's hashes are load-bearing (see CLAUDE.md's Compatibility
+		// constraints) - kept in one place so a future fix to this guard has one call
+		// site to touch, not two that can silently drift apart.
+		void RecordMergedSources(Merge merge, MergeSource source1, MergeSource source2)
+		{
 			if (!source1.TextFile.FullName.EqualsIgnoreCase(_outputPath)
 				&& !source1.TextFile.FullName.StartsWithIgnoreCase(Paths.MergedBundleContentAbsolute))
 			{
@@ -530,13 +552,7 @@ namespace WitcherScriptMerger.Inventory
 			{
 				_inventory.AddModToMerge(source2, merge);
 			}
-
-			return new FileInfo(_outputPath);
 		}
-
-		#endregion
-
-		#region Shared
 
 		bool ConfirmOutputOverwrite(string outputPath)
 		{

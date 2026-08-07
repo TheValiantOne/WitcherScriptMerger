@@ -58,10 +58,22 @@ namespace WitcherScriptMerger.Inventory
 
 		public void MergeByTreeNodesAsync(IEnumerable<TreeNode> fileNodesToMerge, string mergedModName)
 		{
-			var requests = fileNodesToMerge.Select(ExtractRequest).ToArray();
-
+			// TreeNode extraction (ExtractRequest) happens inside DoWork, on the
+			// BackgroundWorker's thread - not out here on the UI thread - matching
+			// where the pre-split FileMerger.MergeByTreeNodesAsync did its own
+			// equivalent TreeNode traversal. This isn't just fidelity for its own
+			// sake: ExtractRequest dereferences node metadata and casts Tag with no
+			// null/type check, and BackgroundWorker captures any exception from
+			// DoWork into RunWorkerCompletedEventArgs.Error instead of letting it
+			// propagate. Extracting out here instead would let that same exception
+			// throw synchronously from btnMergeFiles_Click on the UI thread, which
+			// modern .NET WinForms terminates the process for by default (unlike
+			// .NET Framework's more forgiving behavior) - turning what was at worst a
+			// silently-swallowed no-op (OnMergeComplete never inspects e.Error
+			// either, both before and after this split) into a hard crash.
 			_bgWorker.DoWork += (sender, e) =>
 			{
+				var requests = fileNodesToMerge.Select(ExtractRequest).ToArray();
 				_fileMerger.MergeFilesInteractive(requests, mergedModName);
 			};
 			_bgWorker.RunWorkerAsync();

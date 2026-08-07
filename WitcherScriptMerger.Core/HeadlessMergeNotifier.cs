@@ -16,6 +16,19 @@ namespace WitcherScriptMerger
 		{
 			Write(text, title, icon);
 
+			// A caller-supplied defaultResult is, by IMergeNotifier's contract, the
+			// answer that caller considers safe/non-destructive for this specific
+			// prompt (see IMergeNotifier.ShowMessage's doc comment) - honor it
+			// directly rather than falling through to the generic per-button-set
+			// guess below. This matters beyond just respecting the caller's intent:
+			// for a button set whose generic "safe" answer doesn't actually hold for
+			// every call site (e.g. YesNoCancel's generic Cancel-is-safest guess is
+			// wrong for LoadOrderValidator, where Cancel is the one destructive,
+			// permanent choice), only the caller - not this generic table - actually
+			// knows which answer is safe.
+			if (defaultResult != NotifyResult.None)
+				return defaultResult;
+
 			return buttons switch
 			{
 				NotifyButtons.OK => NotifyResult.OK,
