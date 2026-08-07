@@ -12,22 +12,34 @@ namespace WitcherScriptMerger.Tests.Tools
 	// CONTRIBUTING.md, a committed test must not require or hardcode a machine-specific
 	// path.
 	//
+	// KDiff3 was retired as WSM's shipped text-merge engine/dependency - see
+	// docs/decisions/kdiff3-retirement.md. This class doesn't exercise anything WSM itself
+	// still does: it's a standalone oracle, invoking a real kdiff3.exe binary you happen to
+	// have locally (WSM no longer bundles or requires one) purely to cross-check
+	// DiffPlexMergeEngine's output against a mature, independent 3-way merge
+	// implementation - kept deliberately, not by oversight, since DiffPlexMergeEngine is
+	// now the sole engine and has a known upstream bug (see CLAUDE.md's Compatibility
+	// constraints) that this cross-check has no bearing on but that makes independent
+	// verification of the auto-solvable cases it does cover worth keeping.
+	//
 	// Deliberately narrow in scope: only auto-solvable scenarios are compared here
 	// (whitespace-only, and non-overlapping edits). A genuine two-sided conflict is NOT
 	// cross-checked against the real binary from this test project, because safely
 	// automating KDiff3 headlessly for that case needs the window-persistence detection
-	// documented in CLAUDE.md's compatibility constraints (a ~250ms poll interval that's
+	// documented in docs/decisions/kdiff3-retirement.md (a ~250ms poll interval that's
 	// itself load-bearing, and a window that can't be hidden without hanging the merge
-	// entirely) - that logic (Win32 P/Invoke) lives in the host project's Tools/KDiff3.cs,
-	// which this Core-only test project intentionally doesn't reference. Below uses a
-	// single bounded Process.WaitForExit with a kill-on-timeout fallback instead, safe
-	// only because both scenarios here are designed to be cleanly auto-solvable - per
-	// CLAUDE.md, an untouched, auto-solvable KDiff3 launch reliably exits in a few
-	// seconds regardless of file size.
+	// entirely) - that logic (Win32 P/Invoke) lived in the host project's since-deleted
+	// Tools/KDiff3.cs, which this Core-only test project never referenced anyway. Below
+	// uses a single bounded Process.WaitForExit with a kill-on-timeout fallback instead,
+	// safe only because both scenarios here are designed to be cleanly auto-solvable - per
+	// docs/decisions/kdiff3-retirement.md, an untouched, auto-solvable KDiff3 launch
+	// reliably exits in a few seconds regardless of file size.
 	//
 	// Running this locally (WSM_TEST_GAME_DIR set) will briefly show KDiff3's window and
-	// steal foreground focus, twice - the same documented behavior CLAUDE.md describes
-	// for the real headless CLI path. That's expected, not a bug in this test.
+	// steal foreground focus, twice - the same documented behavior
+	// docs/decisions/kdiff3-retirement.md describes for the old headless CLI path this
+	// class's launch mechanism deliberately mirrors. That's expected, not a bug in this
+	// test.
 	public class KDiff3CrossCheckTests
 	{
 		[Fact]

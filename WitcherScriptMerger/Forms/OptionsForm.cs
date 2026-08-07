@@ -22,8 +22,6 @@ namespace WitcherScriptMerger.Forms
 			chkPromptOutdatedMerge.Checked = Program.Settings.Get<bool>("ValidateMergeSources");
 			chkPromptPrioritize.Checked = Program.Settings.Get<bool>("ValidateCustomLoadOrder");
 
-			chkReviewEachMerge.Checked = Program.Settings.Get<bool>("ReviewEachMerge");
-			chkShowPathsInKDiff3.Checked = Program.Settings.Get<bool>("ShowPathsInKDiff3");
 			chkCompletionSounds.Checked = Program.Settings.Get<bool>("PlayCompletionSounds");
 			chkMergeReport.Checked = Program.Settings.Get<bool>("ReportAfterMerge");
 			chkPackReport.Checked = Program.Settings.Get<bool>("ReportAfterPack");
@@ -62,8 +60,6 @@ namespace WitcherScriptMerger.Forms
 			Program.Settings.Set("ValidateMergeSources", chkPromptOutdatedMerge.Checked);
 			Program.Settings.Set("ValidateCustomLoadOrder", chkPromptPrioritize.Checked);
 
-			Program.Settings.Set("ReviewEachMerge", chkReviewEachMerge.Checked);
-			Program.Settings.Set("ShowPathsInKDiff3", chkShowPathsInKDiff3.Checked);
 			Program.Settings.Set("PlayCompletionSounds", chkCompletionSounds.Checked);
 			Program.Settings.Set("ReportAfterMerge", chkMergeReport.Checked);
 			Program.Settings.Set("ReportAfterPack", chkPackReport.Checked);

@@ -82,19 +82,13 @@ namespace WitcherScriptMerger
 			return fullPath.Substring(startIndex);
 		}
 
-		// KDiff3's own exe-path check goes through AppState.MergeEngine rather than a
-		// direct reference to Tools/KDiff3.cs, which stays in the host project for
-		// its Win32 P/Invoke and so can't be referenced from Core - see
-		// Tools/IMergeEngine.cs. Like AppState.Notifier/Settings, this relies on the
-		// host having set AppState.MergeEngine before calling in - true for the one
-		// real entry point (Program.Main, first line) but not enforced by the type
-		// system; a null MergeEngine here reads as "dependency missing" rather than
-		// "not initialized yet", which could be a confusing message if that
-		// invariant is ever broken by a future entry point.
+		// KDiff3 used to be a third dependency validated here (via AppState.MergeEngine -
+		// see docs/decisions/kdiff3-retirement.md); now that DiffPlexMergeEngine is the
+		// sole text-merge engine and needs no external binary at all, only QuickBMS/wcc_lite
+		// remain real external-tool dependencies.
 		public static bool ValidateDependencyPaths()
 		{
-			return (AppState.MergeEngine != null && AppState.MergeEngine.ValidateExePath() &&
-					File.Exists(QuickBms.ExePath) &&
+			return (File.Exists(QuickBms.ExePath) &&
 					File.Exists(QuickBms.PluginPath) &&
 					File.Exists(WccLite.ExePath));
 		}

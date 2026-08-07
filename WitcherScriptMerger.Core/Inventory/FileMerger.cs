@@ -27,8 +27,9 @@ namespace WitcherScriptMerger.Inventory
 	//    InteractiveMergeRunner supplies callbacks that build the real forms, call
 	//    MainForm.ShowModal, and play the sound - all exactly where the old inline
 	//    `using (var reportForm = ...) { ShowModal }` blocks used to run.
-	//  - KDiff3 invocation goes through IMergeEngine instead of calling Tools/KDiff3.cs
-	//    directly - see Tools/IMergeEngine.cs for why.
+	//  - Text-merge invocation goes through Tools/DiffPlexMergeEngine.cs directly - KDiff3
+	//    (and the IMergeEngine interface that used to sit between this class and it) was
+	//    retired; see docs/decisions/kdiff3-retirement.md.
 	public class FileMerger
 	{
 		#region Types
@@ -99,8 +100,6 @@ namespace WitcherScriptMerger.Inventory
 
 		public MergeProgressInfo ProgressInfo { get; private set; }
 
-		public IMergeEngine MergeEngine { get; set; }
-
 		// Invoked after a successful interactive merge/bundle pack. Only ever set (and
 		// only ever invoked) on the interactive path - MergeConflictsHeadless never
 		// touches these. See InteractiveMergeRunner.cs for what the host project's
@@ -113,28 +112,22 @@ namespace WitcherScriptMerger.Inventory
 		string _mergedModName;
 		string _outputPath;
 
+		// The sole text-merge engine (see DiffPlexMergeEngine.cs's own header comment for
+		// why this is a direct field rather than an injected IMergeEngine - that interface
+		// was deleted along with KDiff3MergeEngine, its only other implementation). Not
+		// exposed as a public property: nothing outside this class has ever needed to read
+		// or replace it, unlike when this was an injected dependency selected once at
+		// startup (Program.Main used to choose between two implementations here).
+		DiffPlexMergeEngine _mergeEngine = new DiffPlexMergeEngine();
+
 		bool _bundleChanged;
 		List<Merge> _pendingBundleMerges = new List<Merge>();
 
 		#endregion
 
-		public FileMerger(MergeInventory inventory, IMergeEngine mergeEngine)
+		public FileMerger(MergeInventory inventory)
 		{
-			// AppState.MergeEngine (the usual source callers pass here) defaults to
-			// null and is only ever populated by the one real entry point
-			// (Program.Main, before anything else runs) - nothing in the type system
-			// enforces that. Failing fast here with a clear message beats letting
-			// Merge()/MergeHeadless() throw an unhandled NullReferenceException from
-			// deep inside a merge the first time any future entry point (a test
-			// harness, the Linux CLI/MCP-only host planned for a later unit)
-			// constructs a FileMerger without going through that startup path first.
-			if (mergeEngine == null)
-				throw new ArgumentNullException(nameof(mergeEngine),
-					"FileMerger requires a non-null IMergeEngine. If this was constructed via " +
-					"AppState.MergeEngine, the host entry point never set it - see Tools/IMergeEngine.cs.");
-
 			_inventory = inventory;
-			MergeEngine = mergeEngine;
 			ProgressInfo = new MergeProgressInfo();
 		}
 
@@ -274,13 +267,12 @@ namespace WitcherScriptMerger.Inventory
 
 		FileInfo MergeTextInteractive(Merge merge, MergeSource source1, MergeSource source2)
 		{
-			// Deliberately engine-neutral wording: this used to name KDiff3 explicitly
-			// ("waiting for KDiff3 to close"), which is wrong when MergeEngine is
-			// DiffPlexMergeEngine instead - no external process or window is involved
-			// there at all. Flagged in code review, see CLAUDE.md.
+			// Deliberately engine-neutral wording rather than naming KDiff3 explicitly
+			// ("waiting for KDiff3 to close") - no external process or window is involved
+			// at all with DiffPlexMergeEngine.
 			ProgressInfo.CurrentAction = $"Merging {source1.Name} && {source2.Name}";
 
-			var result = MergeEngine.Merge(source1, source2, _vanillaFile, _outputPath);
+			var result = _mergeEngine.Merge(source1, source2, _vanillaFile, _outputPath);
 
 			if (result != MergeEngineResult.AutoSolved)
 				return null;
@@ -611,7 +603,14 @@ namespace WitcherScriptMerger.Inventory
 		{
 			ProgressInfo.CurrentAction = $"Merging {source1.Name} && {source2.Name}";
 
-			var result = MergeEngine.MergeHeadless(source1, source2, _vanillaFile, _outputPath);
+			// openConflictMarkers: false for a dry run - a genuine conflict still writes
+			// its conflict-marker sidecar (pre-existing behavior; see
+			// DiffPlexMergeEngine.MergeHeadless's own comment), but must not launch a real
+			// editor/process for what's supposed to be a side-effect-free preview. Without
+			// this, MergeConflictsHeadless(dryRun: true) against a mods folder with N
+			// genuine conflicts would pop open N editor windows - a real bug caught in
+			// review before it shipped (see docs/decisions/kdiff3-retirement.md).
+			var result = _mergeEngine.MergeHeadless(source1, source2, _vanillaFile, _outputPath, openConflictMarkers: !dryRun);
 
 			if (result != MergeEngineResult.AutoSolved)
 				return null;

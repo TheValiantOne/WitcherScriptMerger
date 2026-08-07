@@ -42,9 +42,7 @@
             this.grpMerging = new System.Windows.Forms.GroupBox();
             this.chkPackReport = new System.Windows.Forms.CheckBox();
             this.chkMergeReport = new System.Windows.Forms.CheckBox();
-            this.chkShowPathsInKDiff3 = new System.Windows.Forms.CheckBox();
             this.chkCompletionSounds = new System.Windows.Forms.CheckBox();
-            this.chkReviewEachMerge = new System.Windows.Forms.CheckBox();
             this.grpAutocollapse = new System.Windows.Forms.GroupBox();
             this.chkCollapseCustomLoadOrder = new System.Windows.Forms.CheckBox();
             this.chkCollapseNotMergeable = new System.Windows.Forms.CheckBox();
@@ -176,72 +174,48 @@
             // 
             this.grpMerging.Controls.Add(this.chkPackReport);
             this.grpMerging.Controls.Add(this.chkMergeReport);
-            this.grpMerging.Controls.Add(this.chkShowPathsInKDiff3);
             this.grpMerging.Controls.Add(this.chkCompletionSounds);
-            this.grpMerging.Controls.Add(this.chkReviewEachMerge);
             this.grpMerging.Font = new System.Drawing.Font("Microsoft Sans Serif", 8.25F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
             this.grpMerging.Location = new System.Drawing.Point(12, 291);
             this.grpMerging.Name = "grpMerging";
-            this.grpMerging.Size = new System.Drawing.Size(282, 140);
+            this.grpMerging.Size = new System.Drawing.Size(282, 94);
             this.grpMerging.TabIndex = 1;
             this.grpMerging.TabStop = false;
             this.grpMerging.Text = "Merging";
-            // 
+            //
             // chkPackReport
-            // 
+            //
             this.chkPackReport.AutoSize = true;
             this.chkPackReport.Font = new System.Drawing.Font("Microsoft Sans Serif", 8.25F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.chkPackReport.Location = new System.Drawing.Point(6, 111);
+            this.chkPackReport.Location = new System.Drawing.Point(6, 65);
             this.chkPackReport.Name = "chkPackReport";
             this.chkPackReport.Size = new System.Drawing.Size(183, 17);
-            this.chkPackReport.TabIndex = 7;
+            this.chkPackReport.TabIndex = 5;
             this.chkPackReport.Text = "Show report after packing bundle";
             this.chkPackReport.UseVisualStyleBackColor = true;
-            // 
+            //
             // chkMergeReport
-            // 
+            //
             this.chkMergeReport.AutoSize = true;
             this.chkMergeReport.Font = new System.Drawing.Font("Microsoft Sans Serif", 8.25F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.chkMergeReport.Location = new System.Drawing.Point(6, 88);
+            this.chkMergeReport.Location = new System.Drawing.Point(6, 42);
             this.chkMergeReport.Name = "chkMergeReport";
             this.chkMergeReport.Size = new System.Drawing.Size(166, 17);
-            this.chkMergeReport.TabIndex = 6;
+            this.chkMergeReport.TabIndex = 4;
             this.chkMergeReport.Text = "Show report after each merge";
             this.chkMergeReport.UseVisualStyleBackColor = true;
-            // 
-            // chkShowPathsInKDiff3
-            // 
-            this.chkShowPathsInKDiff3.AutoSize = true;
-            this.chkShowPathsInKDiff3.Font = new System.Drawing.Font("Microsoft Sans Serif", 8.25F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.chkShowPathsInKDiff3.Location = new System.Drawing.Point(6, 42);
-            this.chkShowPathsInKDiff3.Name = "chkShowPathsInKDiff3";
-            this.chkShowPathsInKDiff3.Size = new System.Drawing.Size(141, 17);
-            this.chkShowPathsInKDiff3.TabIndex = 5;
-            this.chkShowPathsInKDiff3.Text = "Show file paths in KDiff3";
-            this.chkShowPathsInKDiff3.UseVisualStyleBackColor = true;
-            // 
+            //
             // chkCompletionSounds
-            // 
+            //
             this.chkCompletionSounds.AutoSize = true;
             this.chkCompletionSounds.Font = new System.Drawing.Font("Microsoft Sans Serif", 8.25F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.chkCompletionSounds.Location = new System.Drawing.Point(6, 65);
+            this.chkCompletionSounds.Location = new System.Drawing.Point(6, 19);
             this.chkCompletionSounds.Name = "chkCompletionSounds";
             this.chkCompletionSounds.Size = new System.Drawing.Size(137, 17);
-            this.chkCompletionSounds.TabIndex = 4;
+            this.chkCompletionSounds.TabIndex = 3;
             this.chkCompletionSounds.Text = "Play completion sounds";
             this.chkCompletionSounds.UseVisualStyleBackColor = true;
-            // 
-            // chkReviewEachMerge
-            // 
-            this.chkReviewEachMerge.AutoSize = true;
-            this.chkReviewEachMerge.Font = new System.Drawing.Font("Microsoft Sans Serif", 8.25F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.chkReviewEachMerge.Location = new System.Drawing.Point(6, 19);
-            this.chkReviewEachMerge.Name = "chkReviewEachMerge";
-            this.chkReviewEachMerge.Size = new System.Drawing.Size(271, 17);
-            this.chkReviewEachMerge.TabIndex = 3;
-            this.chkReviewEachMerge.Text = "Review each merge in KDiff3 (even if auto-solvable)";
-            this.chkReviewEachMerge.UseVisualStyleBackColor = true;
-            // 
+            //
             // grpAutocollapse
             // 
             this.grpAutocollapse.Controls.Add(this.chkCollapseCustomLoadOrder);
@@ -359,9 +333,7 @@
         private System.Windows.Forms.GroupBox grpMerging;
         private System.Windows.Forms.CheckBox chkPackReport;
         private System.Windows.Forms.CheckBox chkMergeReport;
-        private System.Windows.Forms.CheckBox chkShowPathsInKDiff3;
         private System.Windows.Forms.CheckBox chkCompletionSounds;
-        private System.Windows.Forms.CheckBox chkReviewEachMerge;
         private System.Windows.Forms.GroupBox grpAutocollapse;
         private System.Windows.Forms.CheckBox chkCollapseCustomLoadOrder;
         private System.Windows.Forms.CheckBox chkCollapseNotMergeable;

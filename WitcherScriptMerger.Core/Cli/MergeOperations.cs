@@ -32,10 +32,7 @@ namespace WitcherScriptMerger.Cli
 			IReadOnlyDictionary<string, string[]> orderOverrides,
 			bool dryRun = false)
 		{
-			// AppState.MergeEngine is supplied once by the host project at startup
-			// (Program.cs) - see Tools/IMergeEngine.cs for why Core can't construct
-			// its one real implementation (KDiff3MergeEngine) itself.
-			var merger = new FileMerger(inventory, AppState.MergeEngine);
+			var merger = new FileMerger(inventory);
 			return merger.MergeConflictsHeadless(conflicts, mergedModName, orderOverrides, dryRun);
 		}
 	}

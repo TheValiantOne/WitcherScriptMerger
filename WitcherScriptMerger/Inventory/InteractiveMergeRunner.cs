@@ -32,7 +32,7 @@ namespace WitcherScriptMerger.Inventory
 			ProgressChangedEventHandler progressHandler,
 			RunWorkerCompletedEventHandler completedHandler)
 		{
-			_fileMerger = new FileMerger(inventory, AppState.MergeEngine)
+			_fileMerger = new FileMerger(inventory)
 			{
 				OnMergeReport = ShowMergeReport,
 				OnPackReport = ShowPackReport,

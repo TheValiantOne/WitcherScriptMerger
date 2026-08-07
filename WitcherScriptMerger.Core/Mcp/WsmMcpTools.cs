@@ -48,8 +48,9 @@ namespace WitcherScriptMerger.Mcp
 		}
 
 		[McpServerTool(Name = "merge_conflicts"), Description(
-			"Merges detected conflicts headlessly - never opens KDiff3's GUI; conflicts that can't " +
-			"be auto-solved are skipped and reported, not merged. Restrict to specific files with " +
+			"Merges detected conflicts headlessly; conflicts that can't be auto-solved are skipped " +
+			"and reported, not merged - a conflict-marker sidecar file is written and opened in the " +
+			"default editor for manual review instead. Restrict to specific files with " +
 			"relativePaths (default: every detected conflict); override a file's mod merge order " +
 			"with orderOverrides (default merge order otherwise matches the game's own load order). " +
 			"Set dryRun to preview which conflicts would auto-solve without writing any merged " +
@@ -140,7 +141,7 @@ namespace WitcherScriptMerger.Mcp
 
 		[McpServerTool(Name = "get_status"), Description(
 			"Reports WSM's current configuration and dependency status: resolved game/mods " +
-			"directories, whether KDiff3/QuickBMS/wcc_lite are all found, the configured " +
+			"directories, whether QuickBMS/wcc_lite are all found, the configured " +
 			"merged-mod name, and the current conflict count.")]
 		public static object GetStatus()
 		{
@@ -181,7 +182,7 @@ namespace WitcherScriptMerger.Mcp
 		{
 			if (!Paths.ValidateDependencyPaths())
 				throw new InvalidOperationException(
-					"A required dependency (KDiff3, QuickBMS, or wcc_lite) is missing. Configure its path in App.config.");
+					"A required dependency (QuickBMS or wcc_lite) is missing. Configure its path in App.config.");
 
 			if (!Directory.Exists(Paths.ModsDirectory))
 				throw new InvalidOperationException("Mods directory not found - check GameDirectory/ModsDirectory in App.config.");
