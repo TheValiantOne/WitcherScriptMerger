@@ -91,12 +91,32 @@ namespace WitcherScriptMerger
 		// system; a null MergeEngine here reads as "dependency missing" rather than
 		// "not initialized yet", which could be a confusing message if that
 		// invariant is ever broken by a future entry point.
+		// Split out from ValidateDependencyPaths (below) so a host that only supports
+		// flat-file (.ws/.xml) conflicts - WitcherScriptMerger.Headless, the Linux-capable
+		// CLI/MCP-only host, which has no QuickBMS/wcc_lite bundled at all (see its
+		// CLAUDE.md section and docs/decisions/bundle-format-replacement-spike.md) - can
+		// gate merging on just the text-merge engine, without also requiring bundle
+		// tooling it deliberately doesn't ship. Bundle-category conflicts still fail
+		// gracefully per-conflict when attempted without QuickBMS/wcc_lite (see
+		// QuickBms.IsAvailable's callers and FileMerger.GetUnpackedFiles) - this split
+		// doesn't change that, it only changes what gates a *scan/merge run starting at
+		// all*.
+		public static bool ValidateTextMergeDependencies()
+		{
+			return AppState.MergeEngine != null && AppState.MergeEngine.ValidateExePath();
+		}
+
+		// See ValidateTextMergeDependencies above for why this is separate.
+		public static bool ValidateBundleDependencies()
+		{
+			return File.Exists(QuickBms.ExePath) &&
+					File.Exists(QuickBms.PluginPath) &&
+					File.Exists(WccLite.ExePath);
+		}
+
 		public static bool ValidateDependencyPaths()
 		{
-			return (AppState.MergeEngine != null && AppState.MergeEngine.ValidateExePath() &&
-					File.Exists(QuickBms.ExePath) &&
-					File.Exists(QuickBms.PluginPath) &&
-					File.Exists(WccLite.ExePath));
+			return ValidateTextMergeDependencies() && ValidateBundleDependencies();
 		}
 
 		public static bool ValidateModsDirectory()

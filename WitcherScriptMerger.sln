@@ -9,6 +9,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WitcherScriptMerger.Core", 
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WitcherScriptMerger.Tests", "WitcherScriptMerger.Tests\WitcherScriptMerger.Tests.csproj", "{401B0543-E5DB-4AAA-86BF-A7B84E6C6175}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WitcherScriptMerger.Headless", "WitcherScriptMerger.Headless\WitcherScriptMerger.Headless.csproj", "{62BFD4E9-870E-4B51-BDB9-6E63CBFE5665}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -55,6 +57,18 @@ Global
 		{401B0543-E5DB-4AAA-86BF-A7B84E6C6175}.Release|x64.Build.0 = Release|Any CPU
 		{401B0543-E5DB-4AAA-86BF-A7B84E6C6175}.Release|x86.ActiveCfg = Release|Any CPU
 		{401B0543-E5DB-4AAA-86BF-A7B84E6C6175}.Release|x86.Build.0 = Release|Any CPU
+		{62BFD4E9-870E-4B51-BDB9-6E63CBFE5665}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{62BFD4E9-870E-4B51-BDB9-6E63CBFE5665}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{62BFD4E9-870E-4B51-BDB9-6E63CBFE5665}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{62BFD4E9-870E-4B51-BDB9-6E63CBFE5665}.Debug|x64.Build.0 = Debug|Any CPU
+		{62BFD4E9-870E-4B51-BDB9-6E63CBFE5665}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{62BFD4E9-870E-4B51-BDB9-6E63CBFE5665}.Debug|x86.Build.0 = Debug|Any CPU
+		{62BFD4E9-870E-4B51-BDB9-6E63CBFE5665}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{62BFD4E9-870E-4B51-BDB9-6E63CBFE5665}.Release|Any CPU.Build.0 = Release|Any CPU
+		{62BFD4E9-870E-4B51-BDB9-6E63CBFE5665}.Release|x64.ActiveCfg = Release|Any CPU
+		{62BFD4E9-870E-4B51-BDB9-6E63CBFE5665}.Release|x64.Build.0 = Release|Any CPU
+		{62BFD4E9-870E-4B51-BDB9-6E63CBFE5665}.Release|x86.ActiveCfg = Release|Any CPU
+		{62BFD4E9-870E-4B51-BDB9-6E63CBFE5665}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
