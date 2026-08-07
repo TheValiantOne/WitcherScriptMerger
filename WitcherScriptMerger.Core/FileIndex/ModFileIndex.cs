@@ -8,7 +8,7 @@ using WitcherScriptMerger.Tools;
 
 namespace WitcherScriptMerger.FileIndex
 {
-	class ModFileIndex
+	public class ModFileIndex
 	{
 		public List<ModFile> Files;
 
@@ -41,7 +41,7 @@ namespace WitcherScriptMerger.FileIndex
 			ModCount = modDirPaths.Count;
 			if (ModCount == 0)
 			{
-				Program.Notifier.ShowMessage("Can't find any mods in the Mods directory.");
+				AppState.Notifier.ShowMessage("Can't find any mods in the Mods directory.");
 			}
 
 			var bgWorker = new BackgroundWorker
@@ -127,7 +127,7 @@ namespace WitcherScriptMerger.FileIndex
 
 		private IEnumerable<string> GetIgnoredModNames()
 		{
-			var ignoredNames = Program.Settings.Get("IgnoreModNames");
+			var ignoredNames = AppState.Settings.Get("IgnoreModNames");
 			return ignoredNames.Split(',')
 				.Where(name => !string.IsNullOrWhiteSpace(name))
 				.Select(name => name.Trim());

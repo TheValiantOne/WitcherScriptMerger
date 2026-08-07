@@ -3,59 +3,16 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Runtime.InteropServices;
-using System.Text.RegularExpressions;
 using System.Windows.Forms;
 
 namespace WitcherScriptMerger
 {
+	// Pure string helpers (EqualsIgnoreCase, GetPluralS, etc.) moved to Core's
+	// StringExtensions.cs during the Core/host project split, since domain code that
+	// now lives in Core needs them too and Core can't reference this host assembly.
+	// What's left here is WinForms-specific (TreeNode/TreeView helpers, Win32 P/Invoke).
 	static class Extensions
 	{
-		#region Strings
-
-		public static string ReplaceIgnoreCase(this string s, string oldValue, string newValue)
-		{
-			return Regex.Replace(s, Regex.Escape(oldValue), newValue.Replace("$", "$$"), RegexOptions.IgnoreCase);
-		}
-
-		public static bool EqualsIgnoreCase(this string s, string otherString)
-		{
-			return s.Equals(otherString, StringComparison.InvariantCultureIgnoreCase);
-		}
-
-		public static int IndexOfIgnoreCase(this string s, string value, int startIndex = 0)
-		{
-			return s.IndexOf(value, startIndex, StringComparison.InvariantCultureIgnoreCase);
-		}
-
-		public static int LastIndexOfIgnoreCase(this string s, string value, int startIndex = -1)
-		{
-			if (startIndex == -1)
-				startIndex = s.Length - 1;
-			return s.LastIndexOf(value, startIndex, StringComparison.InvariantCultureIgnoreCase);
-		}
-
-		public static bool StartsWithIgnoreCase(this string s, string value)
-		{
-			return s.StartsWith(value, StringComparison.InvariantCultureIgnoreCase);
-		}
-
-		public static bool EndsWithIgnoreCase(this string s, string value)
-		{
-			return s.EndsWith(value, StringComparison.InvariantCultureIgnoreCase);
-		}
-
-		public static bool IsAlphaNumeric(this string s)
-		{
-			return new Regex("^[_a-zA-Z0-9]*$").IsMatch(s);
-		}
-
-		public static string GetPluralS(this int num)
-		{
-			return num == 1 ? "" : "s";
-		}
-
-		#endregion
-
 		#region Tree & Context Menu
 
 		public static IEnumerable<ToolStripItem> GetAvailableItems(this ContextMenuStrip menu)

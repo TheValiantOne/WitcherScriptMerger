@@ -1,17 +1,34 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
-using System.Windows.Forms;
 using WitcherScriptMerger.FileIndex;
-using WitcherScriptMerger.Forms;
 using WitcherScriptMerger.LoadOrder;
 using WitcherScriptMerger.Tools;
 
 namespace WitcherScriptMerger.Inventory
 {
+	// Core/host project split: this class used to mix TreeNode/BackgroundWorker-driven
+	// interactive methods with headless ones (MergeConflictsHeadless etc.) and
+	// constructed WinForms report forms (MergeReportForm/PackReportForm) directly.
+	// Neither TreeNode/BackgroundWorker nor Forms.* can appear here anymore, since this
+	// class now lives in the WinForms-free Core project:
+	//  - The interactive orchestration (MergeFilesInteractive et al.) takes plain
+	//    InteractiveMergeRequest/MergeSource data instead of TreeNode[]. The host
+	//    project's InteractiveMergeRunner (Inventory/InteractiveMergeRunner.cs) extracts
+	//    that data from TreeNodes, owns the BackgroundWorker, and is the thing MainForm
+	//    actually talks to - its public API shape deliberately mirrors what this class
+	//    used to expose (MergeByTreeNodesAsync/RepackBundleAsync), so MainForm's call
+	//    sites barely changed.
+	//  - Report-form popups and completion sounds (System.Media.SystemSounds, also not
+	//    something Core should depend on) are host-only concerns now: this class calls
+	//    OnMergeReport/OnPackReport after a successful interactive merge/pack, and
+	//    InteractiveMergeRunner supplies callbacks that build the real forms, call
+	//    MainForm.ShowModal, and play the sound - all exactly where the old inline
+	//    `using (var reportForm = ...) { ShowModal }` blocks used to run.
+	//  - KDiff3 invocation goes through IMergeEngine instead of calling Tools/KDiff3.cs
+	//    directly - see Tools/IMergeEngine.cs for why.
 	public class FileMerger
 	{
 		#region Types
@@ -45,14 +62,52 @@ namespace WitcherScriptMerger.Inventory
 			public List<string> Skipped { get; } = new List<string>();
 		}
 
+		// One file's interactive merge request, extracted by the host project's
+		// InteractiveMergeRunner from checked TreeNodes so this class never sees a
+		// TreeNode. OrderedModNames is carried explicitly rather than re-derived from
+		// OrderedSources[i].Name (MergeSource.Name goes through
+		// ModFile.GetModNameFromPath, which returns Paths.MergedBundleContent instead
+		// of a real mod name once a source is an intermediate bundle-merge result, not
+		// an original per-mod file).
+		public class InteractiveMergeRequest
+		{
+			public string RelativePath;
+			public bool IsBundle;
+			public string VanillaFilePath;  // null for bundle-category files
+			public MergeSource[] OrderedSources;
+			public string[] OrderedModNames;
+		}
+
+		// Handed to OnMergeReport after each successful interactive pairwise text
+		// merge, so the host project can build a MergeReportForm - Core has no Forms.*
+		// types to build one itself.
+		public class MergeReportData
+		{
+			public int MergeNum;
+			public int TotalMergeCount;
+			public string Source1Path;
+			public string Source2Path;
+			public string OutputPath;
+			public string Source1Name;
+			public string Source2Name;
+		}
+
 		#endregion
 
 		#region Members
 
 		public MergeProgressInfo ProgressInfo { get; private set; }
 
+		public IMergeEngine MergeEngine { get; set; }
+
+		// Invoked after a successful interactive merge/bundle pack. Only ever set (and
+		// only ever invoked) on the interactive path - MergeConflictsHeadless never
+		// touches these. See InteractiveMergeRunner.cs for what the host project's
+		// callbacks actually do (report forms, completion sounds).
+		public Action<MergeReportData> OnMergeReport { get; set; }
+		public Action<string> OnPackReport { get; set; }
+
 		MergeInventory _inventory;
-		TreeNode[] _checkedFileNodes;
 		FileInfo _vanillaFile;
 		string _mergedModName;
 		string _outputPath;
@@ -60,125 +115,75 @@ namespace WitcherScriptMerger.Inventory
 		bool _bundleChanged;
 		List<Merge> _pendingBundleMerges = new List<Merge>();
 
-		BackgroundWorker _bgWorker;
-
 		#endregion
 
-		public FileMerger(
-			MergeInventory inventory,
-			ProgressChangedEventHandler progressHandler,
-			RunWorkerCompletedEventHandler completedHandler)
+		public FileMerger(MergeInventory inventory, IMergeEngine mergeEngine)
 		{
 			_inventory = inventory;
-
-			_bgWorker = new BackgroundWorker
-			{
-				WorkerReportsProgress = true
-			};
-			_bgWorker.ProgressChanged += progressHandler;
+			MergeEngine = mergeEngine;
 			ProgressInfo = new MergeProgressInfo();
-			ProgressInfo.PropertyChanged += (sender, e) =>
+		}
+
+		#region Interactive
+
+		public void MergeFilesInteractive(IReadOnlyList<InteractiveMergeRequest> filesToMerge, string mergedModName)
+		{
+			_mergedModName = mergedModName;
+
+			ProgressInfo.TotalMergeCount = filesToMerge.Sum(f => f.OrderedSources.Length - 1);
+			ProgressInfo.TotalFileCount = filesToMerge.Count;
+
+			for (int i = 0; i < filesToMerge.Count; ++i)
 			{
-				_bgWorker.ReportProgress(0, ProgressInfo);
-			};
-			_bgWorker.RunWorkerCompleted += completedHandler;
-		}
+				var file = filesToMerge[i];
 
-		~FileMerger()
-		{
-			if (_bgWorker != null)
-				_bgWorker.Dispose();
-		}
+				ProgressInfo.CurrentFileName = Path.GetFileName(file.RelativePath);
+				ProgressInfo.CurrentFileNum = i + 1;
+				ProgressInfo.CurrentAction = "Starting merge";
 
-		public void MergeByTreeNodesAsync(
-			IEnumerable<TreeNode> fileNodesToMerge,
-			string mergedModName)
-		{
-			_bgWorker.DoWork += (sender, e) =>
+				if (file.OrderedModNames.Any(name => (new LoadOrderComparer()).Compare(name, _mergedModName) < 0) &&
+					!ConfirmRemainingConflict(_mergedModName))
+					continue;
+
+				var isNew = false;
+				var merge = _inventory.Merges.FirstOrDefault(m => m.RelativePath.EqualsIgnoreCase(file.RelativePath));
+				if (merge == null)
+				{
+					isNew = true;
+					merge = new Merge
+					{
+						RelativePath = file.RelativePath,
+						MergedModName = _mergedModName
+					};
+				}
+
+				if (file.IsBundle)
+				{
+					merge.BundleName = Path.GetFileName(Paths.RetrieveMergedBundlePath());
+					MergeBundleFileInteractive(file, merge, isNew);
+				}
+				else
+					MergeFlatFileInteractive(file, merge, isNew);
+			}
+			if (_bundleChanged)
 			{
-				_checkedFileNodes = fileNodesToMerge.ToArray();
-				_mergedModName = mergedModName;
-
-				var checkedModNodesForFile =
-					_checkedFileNodes.Select(
-						fileNode =>
-						fileNode.GetTreeNodes().Where(
-							modNode =>
-							modNode.Checked
-						).ToArray()
-					).ToArray();
-
-				ProgressInfo.TotalMergeCount = checkedModNodesForFile.Sum(modNodes => modNodes.Length - 1);
-				ProgressInfo.TotalFileCount = _checkedFileNodes.Length;
-
-				for (int i = 0; i < _checkedFileNodes.Length; ++i)
+				var newBundlePath = PackNewBundle(Paths.RetrieveMergedBundlePath());
+				if (newBundlePath != null)
 				{
-					var fileNode = _checkedFileNodes[i];
+					ProgressInfo.CurrentAction = "Adding bundle merge to inventory";
+					foreach (var bundleMerge in _pendingBundleMerges)
+						_inventory.Merges.Add(bundleMerge);
 
-					ProgressInfo.CurrentFileName = Path.GetFileName(fileNode.Text);
-					ProgressInfo.CurrentFileNum = i + 1;
-
-					var checkedModNodes = checkedModNodesForFile[i];
-
-					ProgressInfo.CurrentAction = "Starting merge";
-
-					if (checkedModNodes.Any(node => (new LoadOrderComparer()).Compare(node.Text, _mergedModName) < 0) &&
-						!ConfirmRemainingConflict(_mergedModName))
-						continue;
-
-					var isNew = false;
-					var merge = _inventory.Merges.FirstOrDefault(m => m.RelativePath.EqualsIgnoreCase(fileNode.Text));
-					if (merge == null)
-					{
-						isNew = true;
-						merge = new Merge
-						{
-							RelativePath = fileNode.Text,
-							MergedModName = _mergedModName
-						};
-					}
-
-					if ((ModFileCategory)fileNode.Parent.Tag == Categories.BundleText)
-					{
-						merge.BundleName = Path.GetFileName(Paths.RetrieveMergedBundlePath());
-						MergeBundleFileNode(fileNode, checkedModNodes, merge, isNew);
-					}
-					else
-						MergeFlatFileNode(fileNode, checkedModNodes, merge, isNew);
+					OnPackReport?.Invoke(newBundlePath);
 				}
-				if (_bundleChanged)
-				{
-					var newBundlePath = PackNewBundle(Paths.RetrieveMergedBundlePath());
-					if (newBundlePath != null)
-					{
-						ProgressInfo.CurrentAction = "Adding bundle merge to inventory";
-						foreach (var bundleMerge in _pendingBundleMerges)
-							_inventory.Merges.Add(bundleMerge);
-
-						if (Program.Settings.Get<bool>("PlayCompletionSounds"))
-						{
-							System.Media.SystemSounds.Asterisk.Play();
-						}
-						if (Program.Settings.Get<bool>("ReportAfterPack"))
-						{
-							using (var reportForm = new PackReportForm(newBundlePath))
-							{
-								ProgressInfo.CurrentAction = "Showing pack report";
-								Program.Notifier.ShowModal(reportForm);
-							}
-						}
-					}
-				}
-				CleanUpTempFiles();
-				CleanUpEmptyDirectories();
-			};
-			_bgWorker.RunWorkerAsync();
+			}
+			CleanUpTempFiles();
+			CleanUpEmptyDirectories();
 		}
 
-		void MergeFlatFileNode(TreeNode fileNode, TreeNode[] checkedModNodes, Merge merge, bool isNew)
+		void MergeFlatFileInteractive(InteractiveMergeRequest file, Merge merge, bool isNew)
 		{
-			var metadata1 = checkedModNodes[0].GetMetadata();
-			var source1 = MergeSource.FromFlatFile(new FileInfo(metadata1.FilePath), metadata1.FileHash);
+			var source1 = file.OrderedSources[0];
 
 			var relPath = Paths.GetRelativePath(
 				source1.TextFile.FullName,
@@ -189,21 +194,20 @@ namespace WitcherScriptMerger.Inventory
 			if (File.Exists(_outputPath) && !ConfirmOutputOverwrite(_outputPath))
 				return;
 
-			_vanillaFile = new FileInfo(fileNode.GetMetadata().FilePath);
+			_vanillaFile = new FileInfo(file.VanillaFilePath);
 
-			for (int i = 1; i < checkedModNodes.Length; ++i)
+			for (int i = 1; i < file.OrderedSources.Length; ++i)
 			{
 				++ProgressInfo.CurrentMergeNum;
 
-				var metadata2 = checkedModNodes[i].GetMetadata();
-				var source2 = MergeSource.FromFlatFile(new FileInfo(metadata2.FilePath), metadata2.FileHash);
+				var source2 = file.OrderedSources[i];
 
-				var mergedFile = MergeText(merge, source1, source2);
+				var mergedFile = MergeTextInteractive(merge, source1, source2);
 				if (mergedFile != null)
 				{
 					source1 = MergeSource.FromFlatFile(mergedFile, null);
 				}
-				else if (DialogResult.Abort == HandleCanceledMerge(checkedModNodes.Length - i - 1, merge))
+				else if (!ConfirmContinueAfterCanceledMerge(file.OrderedSources.Length - i - 1, merge))
 					break;
 			}
 
@@ -214,11 +218,135 @@ namespace WitcherScriptMerger.Inventory
 			}
 		}
 
-		// Headless equivalent of MergeFlatFileNode/MergeBundleFileNode, driven by
-		// plain ModFile/FileHash data (FileIndex/ModFileIndex.Conflicts) instead of
-		// ConflictTree's TreeNodes - those already carry everything needed (relative
-		// path, category, per-mod name and hash), so no TreeNode is ever constructed
-		// for this path.
+		void MergeBundleFileInteractive(InteractiveMergeRequest file, Merge merge, bool isNew)
+		{
+			_outputPath = Path.Combine(Paths.MergedBundleContent, file.RelativePath);
+
+			if (File.Exists(_outputPath) && !ConfirmOutputOverwrite(_outputPath))
+				return;
+
+			_vanillaFile = null;
+
+			var source1 = file.OrderedSources[0];
+
+			for (int i = 1; i < file.OrderedSources.Length; ++i)
+			{
+				++ProgressInfo.CurrentMergeNum;
+
+				var source2 = file.OrderedSources[i];
+
+				if (!GetUnpackedFiles(file.RelativePath, ref source1, ref source2))
+				{
+					if (ConfirmContinueAfterCanceledMerge(file.OrderedSources.Length - i - 1, merge))
+						continue;
+					break;
+				}
+
+				var mergedFile = MergeTextInteractive(merge, source1, source2);
+				if (mergedFile != null)
+				{
+					source1 = MergeSource.FromFlatFile(mergedFile, null);
+				}
+				else if (!ConfirmContinueAfterCanceledMerge(file.OrderedSources.Length - i - 1, merge))
+					break;
+			}
+
+			if (merge.BundleName != null && isNew && merge.Mods.Count > 1)
+			{
+				_bundleChanged = true;
+				_pendingBundleMerges.Add(merge);
+			}
+		}
+
+		FileInfo MergeTextInteractive(Merge merge, MergeSource source1, MergeSource source2)
+		{
+			ProgressInfo.CurrentAction = $"Merging {source1.Name} && {source2.Name} — waiting for KDiff3 to close";
+
+			var result = MergeEngine.Merge(source1, source2, _vanillaFile, _outputPath);
+
+			if (result != MergeEngineResult.AutoSolved)
+				return null;
+
+			if (!source1.TextFile.FullName.EqualsIgnoreCase(_outputPath)
+				&& !source1.TextFile.FullName.StartsWithIgnoreCase(Paths.MergedBundleContentAbsolute))
+			{
+				_inventory.AddModToMerge(source1, merge);
+			}
+
+			if (!source2.TextFile.FullName.EqualsIgnoreCase(_outputPath)
+				&& !source2.TextFile.FullName.StartsWithIgnoreCase(Paths.MergedBundleContentAbsolute))
+			{
+				_inventory.AddModToMerge(source2, merge);
+			}
+
+			OnMergeReport?.Invoke(new MergeReportData
+			{
+				MergeNum = ProgressInfo.CurrentMergeNum,
+				TotalMergeCount = ProgressInfo.TotalMergeCount,
+				Source1Path = source1.TextFile.FullName,
+				Source2Path = source2.TextFile.FullName,
+				OutputPath = _outputPath,
+				Source1Name = source1.Name,
+				Source2Name = source2.Name,
+			});
+
+			return new FileInfo(_outputPath);
+		}
+
+		// Synchronous - the host project's InteractiveMergeRunner runs this on its own
+		// BackgroundWorker, same as it did when this logic lived directly in
+		// RepackBundleAsync.
+		public string RepackBundle(string bundlePath)
+		{
+			var newBundlePath = PackNewBundle(bundlePath, isRepack: true);
+			if (newBundlePath != null)
+				OnPackReport?.Invoke(newBundlePath);
+			return newBundlePath;
+		}
+
+		bool ConfirmRemainingConflict(string mergedModName)
+		{
+			return (NotifyResult.Yes == AppState.Notifier.ShowMessage(
+				"There will still be a conflict if you use the merged mod name " + mergedModName + ".\n\n" +
+					"The Witcher 3 loads mods in case-insensitive ASCII order, " +
+					"so this merged mod name will load after one of the original mods, " +
+					"and the merged file will be ignored.\n\n" +
+					"Use this name anyway?",
+				"Merged Mod Name Conflict",
+				NotifyButtons.YesNo,
+				NotifyIcon.Exclamation));
+		}
+
+		// Returns false when the caller should stop trying further merges for this
+		// file (user declined to continue past a canceled/failed merge).
+		bool ConfirmContinueAfterCanceledMerge(int remainingMergesForFile, Merge merge)
+		{
+			var msg = $"Merge {ProgressInfo.CurrentMergeNum} of {ProgressInfo.TotalMergeCount} was canceled.";
+			var buttons = NotifyButtons.OK;
+			if (remainingMergesForFile > 0)
+			{
+				var fileName = Path.GetFileName(merge.RelativePath);
+				msg += $"\n\nContinue with {remainingMergesForFile} remaining merge{remainingMergesForFile.GetPluralS()} for file {fileName}?";
+				buttons = NotifyButtons.YesNo;
+			}
+			var result = AppState.Notifier.ShowMessage(msg, "Skipped Merge", buttons, NotifyIcon.Information);
+			if (result == NotifyResult.No)
+			{
+				ProgressInfo.CurrentMergeNum += remainingMergesForFile;
+				return false;
+			}
+			return true;
+		}
+
+		#endregion
+
+		#region Headless
+
+		// Headless equivalent of MergeFlatFileInteractive/MergeBundleFileInteractive,
+		// driven by plain ModFile/FileHash data (FileIndex/ModFileIndex.Conflicts)
+		// instead of InteractiveMergeRequest - those already carry everything needed
+		// (relative path, category, per-mod name and hash), so no TreeNode is ever
+		// involved on this path either.
 		public HeadlessMergeSummary MergeConflictsHeadless(
 			IEnumerable<ModFile> conflicts,
 			string mergedModName,
@@ -368,7 +496,7 @@ namespace WitcherScriptMerger.Inventory
 				var unknown = explicitOrder.Where(name => !conflict.ContainsMod(name)).ToArray();
 				if (unknown.Any())
 				{
-					Program.Notifier.ShowError(
+					AppState.Notifier.ShowError(
 						$"Order file lists unknown mod(s) for {conflict.RelativePath}: {string.Join(", ", unknown)}");
 					return null;
 				}
@@ -385,9 +513,9 @@ namespace WitcherScriptMerger.Inventory
 		{
 			ProgressInfo.CurrentAction = $"Merging {source1.Name} && {source2.Name}";
 
-			var result = KDiff3.RunHeadless(source1, source2, _vanillaFile, _outputPath);
+			var result = MergeEngine.MergeHeadless(source1, source2, _vanillaFile, _outputPath);
 
-			if (result != KDiff3.HeadlessResult.AutoSolved)
+			if (result != MergeEngineResult.AutoSolved)
 				return null;
 
 			if (!source1.TextFile.FullName.EqualsIgnoreCase(_outputPath)
@@ -405,128 +533,17 @@ namespace WitcherScriptMerger.Inventory
 			return new FileInfo(_outputPath);
 		}
 
-		void MergeBundleFileNode(TreeNode fileNode, TreeNode[] checkedModNodes, Merge merge, bool isNew)
-		{
-			_outputPath = Path.Combine(Paths.MergedBundleContent, fileNode.Text);
+		#endregion
 
-			if (File.Exists(_outputPath) && !ConfirmOutputOverwrite(_outputPath))
-				return;
-
-			_vanillaFile = null;
-
-			var metadata1 = checkedModNodes[0].GetMetadata();
-			var source1 = MergeSource.FromBundle(new FileInfo(metadata1.FilePath), metadata1.FileHash);
-
-			for (int i = 1; i < checkedModNodes.Length; ++i)
-			{
-				++ProgressInfo.CurrentMergeNum;
-
-				var metadata2 = checkedModNodes[i].GetMetadata();
-				var source2 = MergeSource.FromBundle(new FileInfo(metadata2.FilePath), metadata2.FileHash);
-
-				if (!GetUnpackedFiles(fileNode.Text, ref source1, ref source2))
-				{
-					if (DialogResult.Abort != HandleCanceledMerge(checkedModNodes.Length - i - 1, merge))
-						continue;
-					break;
-				}
-
-				var mergedFile = MergeText(merge, source1, source2);
-				if (mergedFile != null)
-				{
-					source1 = MergeSource.FromFlatFile(mergedFile, null);
-				}
-				else if (DialogResult.Abort == HandleCanceledMerge(checkedModNodes.Length - i - 1, merge))
-					break;
-			}
-
-			if (merge.BundleName != null && isNew && merge.Mods.Count > 1)
-			{
-				_bundleChanged = true;
-				_pendingBundleMerges.Add(merge);
-			}
-		}
-
-		FileInfo MergeText(Merge merge, MergeSource source1, MergeSource source2)
-		{
-			ProgressInfo.CurrentAction = $"Merging {source1.Name} && {source2.Name} — waiting for KDiff3 to close";
-
-			var exitCode = KDiff3.Run(source1, source2, _vanillaFile, _outputPath);
-
-			if (exitCode == 0)
-			{
-				if (!source1.TextFile.FullName.EqualsIgnoreCase(_outputPath)
-					&& !source1.TextFile.FullName.StartsWithIgnoreCase(Paths.MergedBundleContentAbsolute))
-				{
-					_inventory.AddModToMerge(source1, merge);
-				}
-
-				if (!source2.TextFile.FullName.EqualsIgnoreCase(_outputPath)
-					&& !source2.TextFile.FullName.StartsWithIgnoreCase(Paths.MergedBundleContentAbsolute))
-				{
-					_inventory.AddModToMerge(source2, merge);
-				}
-
-				if (Program.Settings.Get<bool>("PlayCompletionSounds"))
-				{
-					System.Media.SystemSounds.Asterisk.Play();
-				}
-				if (Program.Settings.Get<bool>("ReportAfterMerge"))
-				{
-					using (var reportForm = new MergeReportForm(
-						ProgressInfo.CurrentMergeNum, ProgressInfo.TotalMergeCount,
-						source1.TextFile.FullName, source2.TextFile.FullName, _outputPath,
-						source1.Name, source2.Name))
-					{
-						ProgressInfo.CurrentAction = "Showing merge report";
-						Program.Notifier.ShowModal(reportForm);
-					}
-				}
-				return new FileInfo(_outputPath);
-			}
-			else
-				return null;
-		}
-
-		bool ConfirmRemainingConflict(string mergedModName)
-		{
-			return (DialogResult.Yes == Program.Notifier.ShowMessage(
-				"There will still be a conflict if you use the merged mod name " + mergedModName + ".\n\n" +
-					"The Witcher 3 loads mods in case-insensitive ASCII order, " +
-					"so this merged mod name will load after one of the original mods, " +
-					"and the merged file will be ignored.\n\n" +
-					"Use this name anyway?",
-				"Merged Mod Name Conflict",
-				MessageBoxButtons.YesNo,
-				MessageBoxIcon.Exclamation));
-		}
+		#region Shared
 
 		bool ConfirmOutputOverwrite(string outputPath)
 		{
-			return (DialogResult.Yes == Program.Notifier.ShowMessage(
+			return (NotifyResult.Yes == AppState.Notifier.ShowMessage(
 				"The output file below already exists! Overwrite?\n\n" + outputPath,
 				"Overwrite?",
-				MessageBoxButtons.YesNo,
-				MessageBoxIcon.Exclamation));
-		}
-
-		DialogResult HandleCanceledMerge(int remainingMergesForFile, Merge merge)
-		{
-			var msg = $"Merge {ProgressInfo.CurrentMergeNum} of {ProgressInfo.TotalMergeCount} was canceled.";
-			var buttons = MessageBoxButtons.OK;
-			if (remainingMergesForFile > 0)
-			{
-				var fileName = Path.GetFileName(merge.RelativePath);
-				msg += $"\n\nContinue with {remainingMergesForFile} remaining merge{remainingMergesForFile.GetPluralS()} for file {fileName}?";
-				buttons = MessageBoxButtons.YesNo;
-			}
-			var result = Program.Notifier.ShowMessage(msg, "Skipped Merge", buttons, MessageBoxIcon.Information);
-			if (result == DialogResult.No)
-			{
-				ProgressInfo.CurrentMergeNum += remainingMergesForFile;
-				return DialogResult.Abort;
-			}
-			return DialogResult.OK;
+				NotifyButtons.YesNo,
+				NotifyIcon.Exclamation));
 		}
 
 		bool GetUnpackedFiles(string contentRelativePath, ref MergeSource source1, ref MergeSource source2)
@@ -597,31 +614,6 @@ namespace WitcherScriptMerger.Inventory
 				: null;
 		}
 
-		public void RepackBundleAsync(string bundlePath)
-		{
-			if (_bgWorker.IsBusy)
-				throw new Exception("BackgroundWorker can't run 2 tasks concurrently.");
-			_bgWorker.DoWork += (sender, e) =>
-			{
-				var newBundlePath = PackNewBundle(bundlePath, true);
-				if (newBundlePath == null)
-					return;
-
-				if (Program.Settings.Get<bool>("PlayCompletionSounds"))
-				{
-					System.Media.SystemSounds.Asterisk.Play();
-				}
-				if (Program.Settings.Get<bool>("ReportAfterPack"))
-				{
-					using (var reportForm = new PackReportForm(bundlePath))
-					{
-						Program.Notifier.ShowModal(reportForm);
-					}
-				}
-			};
-			_bgWorker.RunWorkerAsync();
-		}
-
 		string PackNewBundle(string bundlePath, bool isRepack = false)
 		{
 			ProgressInfo.CurrentPhase = (!isRepack ? "Packing Bundle" : "Repacking Bundle");
@@ -654,11 +646,11 @@ namespace WitcherScriptMerger.Inventory
 			}
 			catch (Exception ex)
 			{
-				Program.Notifier.ShowMessage(
+				AppState.Notifier.ShowMessage(
 					"Non-critical error: Failed to delete temporary unpacked bundle content.\n\n" + ex.Message,
 					"Error",
-					MessageBoxButtons.OK,
-					MessageBoxIcon.Warning);
+					NotifyButtons.OK,
+					NotifyIcon.Warning);
 			}
 		}
 
@@ -674,11 +666,11 @@ namespace WitcherScriptMerger.Inventory
 			}
 			catch (Exception ex)
 			{
-				Program.Notifier.ShowMessage(
+				AppState.Notifier.ShowMessage(
 					"Non-critical error: Failed to delete empty Merged Bundle Content directories.\n\n" + ex.Message,
 					"Error",
-					MessageBoxButtons.OK,
-					MessageBoxIcon.Warning);
+					NotifyButtons.OK,
+					NotifyIcon.Warning);
 			}
 		}
 
@@ -739,5 +731,7 @@ namespace WitcherScriptMerger.Inventory
 				throw;
 			}
 		}
+
+		#endregion
 	}
 }

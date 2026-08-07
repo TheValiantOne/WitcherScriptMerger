@@ -23,7 +23,7 @@
 		}
 	}
 
-	static class Categories
+	public static class Categories
 	{
 		public static ModFileCategory Script = new ModFileCategory(
 			1, "Scripts", "These plaintext .ws files can be merged", true, false);

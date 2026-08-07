@@ -1,11 +1,10 @@
 ﻿using System;
 using System.IO;
-using System.Windows.Forms;
 using WitcherScriptMerger.Tools;
 
 namespace WitcherScriptMerger
 {
-	static class Paths
+	public static class Paths
 	{
 		public const string TempBundleContent = "tempbundlecontent";
 		public static string MergedBundleContent = "Merged Bundle Content";
@@ -15,7 +14,7 @@ namespace WitcherScriptMerger
 		public static string VanillaScriptBase = Path.Combine("content", "content0", "scripts");
 		public static string BundleBase = "content";
 
-		public static string GameDirectory => Program.Settings.Get("GameDirectory");
+		public static string GameDirectory => AppState.Settings.Get("GameDirectory");
 
 		public static string GameExe => Path.Combine(GameDirectory, "bin", "x64", "witcher3.exe");
 
@@ -23,7 +22,7 @@ namespace WitcherScriptMerger
 
 		public static string DlcDirectory => Path.Combine(GameDirectory, "DLC");
 
-		static string _scriptsDirSetting = Program.Settings.Get("VanillaScriptsDirectory");
+		static string _scriptsDirSetting = AppState.Settings.Get("VanillaScriptsDirectory");
 		public static string ScriptsDirectory
 		{
 			get
@@ -34,7 +33,7 @@ namespace WitcherScriptMerger
 			}
 		}
 
-		static string _modsDirSetting = Program.Settings.Get("ModsDirectory");
+		static string _modsDirSetting = AppState.Settings.Get("ModsDirectory");
 		public static string ModsDirectory
 		{
 			get
@@ -55,9 +54,13 @@ namespace WitcherScriptMerger
 			return fullPath.Substring(startIndex);
 		}
 
+		// KDiff3's own exe-path check goes through AppState.MergeEngine rather than a
+		// direct reference to Tools/KDiff3.cs, which stays in the host project for
+		// its Win32 P/Invoke and so can't be referenced from Core - see
+		// Tools/IMergeEngine.cs.
 		public static bool ValidateDependencyPaths()
 		{
-			return (File.Exists(KDiff3.ExePath) &&
+			return (AppState.MergeEngine != null && AppState.MergeEngine.ValidateExePath() &&
 					File.Exists(QuickBms.ExePath) &&
 					File.Exists(QuickBms.PluginPath) &&
 					File.Exists(WccLite.ExePath));
@@ -67,7 +70,7 @@ namespace WitcherScriptMerger
 		{
 			if (!Directory.Exists(ModsDirectory))
 			{
-				Program.Notifier.ShowMessage(
+				AppState.Notifier.ShowMessage(
 					(!IsModsDirectoryDerived
 					 ? "Can't find the Mods directory specified in the config file."
 					 : "Can't find Mods directory in the specified game directory."));
@@ -80,7 +83,7 @@ namespace WitcherScriptMerger
 		{
 			if (!Directory.Exists(ScriptsDirectory))
 			{
-				Program.Notifier.ShowMessage(
+				AppState.Notifier.ShowMessage(
 					(!IsScriptsDirectoryDerived
 					 ? "Can't find the Scripts directory specified in the config file."
 					 : "Can't find \\content\\content0\\scripts directory in the specified game directory.") +
@@ -94,7 +97,7 @@ namespace WitcherScriptMerger
 		{
 			if (!Directory.Exists(BundlesDirectory))
 			{
-				Program.Notifier.ShowMessage("Can't find 'content' directory in the specified game directory.");
+				AppState.Notifier.ShowMessage("Can't find 'content' directory in the specified game directory.");
 				return false;
 			}
 			return true;
@@ -111,10 +114,10 @@ namespace WitcherScriptMerger
 
 		public static string RetrieveMergedModName()
 		{
-			var mergedModName = Program.Settings.Get("MergedModName");
+			var mergedModName = AppState.Settings.Get("MergedModName");
 			if (string.IsNullOrWhiteSpace(mergedModName))
 			{
-				Program.Notifier.ShowMessage("The MergedModName setting isn't configured in the .config file.");
+				AppState.Notifier.ShowMessage("The MergedModName setting isn't configured in the .config file.");
 				return null;
 			}
 			if (mergedModName.Length > 64)
@@ -138,13 +141,13 @@ namespace WitcherScriptMerger
 
 		static bool ConfirmInvalidModName(string mergedModName)
 		{
-			return (DialogResult.Yes == Program.Notifier.ShowMessage(
+			return (NotifyResult.Yes == AppState.Notifier.ShowMessage(
 				"The Witcher 3 won't load the merged file if the mod name isn't \"mod\" followed by numbers, letters, or underscores."
 				+ "\n\nUse this name anyway?\n" + mergedModName
 				+ "\n\nTo change the name: Click No, then edit \"MergedModName\" in the .config file.",
 				"Warning",
-				MessageBoxButtons.YesNo,
-				MessageBoxIcon.Exclamation));
+				NotifyButtons.YesNo,
+				NotifyIcon.Exclamation));
 		}
 	}
 }

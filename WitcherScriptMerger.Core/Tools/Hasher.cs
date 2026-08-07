@@ -4,7 +4,7 @@ using System.IO.Hashing;
 
 namespace WitcherScriptMerger.Tools
 {
-	static class Hasher
+	public static class Hasher
 	{
 		// xxHash32, seed 0 - matches the hand-ported implementation this replaced,
 		// so hashes already recorded in existing MergeInventory.xml files stay valid.

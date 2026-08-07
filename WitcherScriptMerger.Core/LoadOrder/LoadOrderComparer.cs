@@ -3,7 +3,7 @@ using System.Collections.Generic;
 
 namespace WitcherScriptMerger.LoadOrder
 {
-	class LoadOrderComparer : IComparer<string>, IComparer<ModLoadSetting>
+	public class LoadOrderComparer : IComparer<string>, IComparer<ModLoadSetting>
 	{
 		public int Compare(string x, string y)
 		{

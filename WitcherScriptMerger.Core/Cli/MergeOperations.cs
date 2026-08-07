@@ -7,7 +7,7 @@ namespace WitcherScriptMerger.Cli
 {
 	// Shared scan/merge orchestration behind both the `merge` CLI verb (Program.cs) and the
 	// MCP tools (Mcp/WsmMcpTools.cs) - see CLAUDE.md's CLI mode / MCP mode sections.
-	static class MergeOperations
+	public static class MergeOperations
 	{
 		public static ModFileIndex ScanConflicts()
 		{
@@ -15,9 +15,9 @@ namespace WitcherScriptMerger.Cli
 			using (var scanComplete = new ManualResetEventSlim(false))
 			{
 				modIndex.BuildAsync(
-					Program.Settings.Get<bool>("CheckScripts"),
-					Program.Settings.Get<bool>("CheckXmlFiles"),
-					Program.Settings.Get<bool>("CheckBundleContents"),
+					AppState.Settings.Get<bool>("CheckScripts"),
+					AppState.Settings.Get<bool>("CheckXmlFiles"),
+					AppState.Settings.Get<bool>("CheckBundleContents"),
 					(s, e) => { },
 					(s, e) => scanComplete.Set());
 				scanComplete.Wait();
@@ -31,7 +31,10 @@ namespace WitcherScriptMerger.Cli
 			string mergedModName,
 			IReadOnlyDictionary<string, string[]> orderOverrides)
 		{
-			var merger = new FileMerger(inventory, (s, e) => { }, (s, e) => { });
+			// AppState.MergeEngine is supplied once by the host project at startup
+			// (Program.cs) - see Tools/IMergeEngine.cs for why Core can't construct
+			// its one real implementation (KDiff3MergeEngine) itself.
+			var merger = new FileMerger(inventory, AppState.MergeEngine);
 			return merger.MergeConflictsHeadless(conflicts, mergedModName, orderOverrides);
 		}
 	}

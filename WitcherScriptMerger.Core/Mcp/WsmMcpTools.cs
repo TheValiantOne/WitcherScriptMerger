@@ -11,14 +11,14 @@ using WitcherScriptMerger.LoadOrder;
 namespace WitcherScriptMerger.Mcp
 {
 	[McpServerToolType]
-	static class WsmMcpTools
+	public static class WsmMcpTools
 	{
-		// scan_conflicts and merge_conflicts both load-then-mutate the shared Program.Inventory
+		// scan_conflicts and merge_conflicts both load-then-mutate the shared AppState.Inventory
 		// (MergeInventory.xml is the load-bearing, string-hash-compared merge record - see
 		// CLAUDE.md's Compatibility constraints). An MCP client can issue tool calls concurrently;
 		// without serializing these two, one call's Load() can clobber another's in-flight
 		// instance and Save() can write whatever happened to land in the field. Not a concern for
-		// get_status/list_merges - neither touches Program.Inventory.
+		// get_status/list_merges - neither touches AppState.Inventory.
 		static readonly object _inventoryLock = new object();
 
 		[McpServerTool(Name = "scan_conflicts"), Description(
@@ -33,7 +33,7 @@ namespace WitcherScriptMerger.Mcp
 
 			lock (_inventoryLock)
 			{
-				Program.Inventory = MergeInventory.Load(Paths.Inventory);
+				AppState.Inventory = MergeInventory.Load(Paths.Inventory);
 				var modIndex = MergeOperations.ScanConflicts();
 
 				return modIndex.Conflicts.Select(c => new
@@ -42,7 +42,7 @@ namespace WitcherScriptMerger.Mcp
 					category = c.Category.DisplayName,
 					mods = c.Mods.Select(h => new { name = h.Name, hash = h.Hash, isOutdated = h.IsOutdated }).ToArray(),
 					defaultOrder = c.Mods.Select(h => h.Name).OrderBy(n => n, new LoadOrderComparer()).ToArray(),
-					alreadyResolved = Program.Inventory.HasResolvedConflict(c),
+					alreadyResolved = AppState.Inventory.HasResolvedConflict(c),
 				}).ToArray();
 			}
 		}
@@ -64,15 +64,15 @@ namespace WitcherScriptMerger.Mcp
 
 			lock (_inventoryLock)
 			{
-				Program.Inventory = MergeInventory.Load(Paths.Inventory);
+				AppState.Inventory = MergeInventory.Load(Paths.Inventory);
 				var modIndex = MergeOperations.ScanConflicts();
 
 				var conflicts = relativePaths == null
 					? modIndex.Conflicts
 					: modIndex.Conflicts.Where(c => relativePaths.Any(p => p.EqualsIgnoreCase(c.RelativePath)));
 
-				var summary = MergeOperations.RunMerge(Program.Inventory, conflicts, mergedModName, orderOverrides);
-				Program.Inventory.Save();
+				var summary = MergeOperations.RunMerge(AppState.Inventory, conflicts, mergedModName, orderOverrides);
+				AppState.Inventory.Save();
 
 				return new { merged = summary.Merged, skipped = summary.Skipped };
 			}
@@ -97,7 +97,7 @@ namespace WitcherScriptMerger.Mcp
 				modsDirectory = Paths.ModsDirectory,
 				dependenciesValid,
 				modsDirectoryExists,
-				mergedModName = Program.Settings.Get("MergedModName"),
+				mergedModName = AppState.Settings.Get("MergedModName"),
 				conflictCount,
 			};
 		}

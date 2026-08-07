@@ -1,9 +1,8 @@
 ﻿using System.Linq;
-using System.Windows.Forms;
 
 namespace WitcherScriptMerger.LoadOrder
 {
-	static class LoadOrderValidator
+	public static class LoadOrderValidator
 	{
 		public static void ValidateAndFix(CustomLoadOrder loadOrder)
 		{
@@ -17,33 +16,33 @@ namespace WitcherScriptMerger.LoadOrder
 				return;
 
 			var choice = PromptToPrioritizeMergedMod(loadOrder.FilePath);
-			if (choice == DialogResult.Yes)
+			if (choice == NotifyResult.Yes)
 			{
 				PrioritizeMergedMod(loadOrder, mergedMod);
 			}
-			else if (choice == DialogResult.Cancel)  // Never
+			else if (choice == NotifyResult.Cancel)  // Never
 			{
-				Program.Settings.Set("ValidateCustomLoadOrder", false);
-				Program.Settings.Save();
+				AppState.Settings.Set("ValidateCustomLoadOrder", false);
+				AppState.Settings.Save();
 			}
 		}
 
-		static DialogResult PromptToPrioritizeMergedMod(string modsSettingsPath)
+		// Routed through IMergeNotifier rather than a direct MessageBox.Show(...) call
+		// (as this used before the Core/host project split) since Core can't reference
+		// System.Windows.Forms at all. This does mean losing two purely cosmetic
+		// touches the direct call had: MessageBoxManager's "Ne&ver" caption on the
+		// Cancel button (shown as plain "Cancel" now) and defaulting focus to the No
+		// button - both acceptable per the Core split's design notes; see the PR
+		// description.
+		static NotifyResult PromptToPrioritizeMergedMod(string modsSettingsPath)
 		{
-			MessageBoxManager.Cancel = "Ne&ver";
-			MessageBoxManager.Register();
-
-			var choice = MessageBox.Show(
+			return AppState.Notifier.ShowMessage(
 				$"{modsSettingsPath}\n\n" +
 				"Detected custom load order in the file above, and merged files aren't configured to load first.\n\n" +
 				"Would you like Script Merger to modify your custom load order so that your merged files have top priority?",
 				"Custom Load Order Problem",
-				MessageBoxButtons.YesNoCancel,
-				MessageBoxIcon.Exclamation,
-				MessageBoxDefaultButton.Button2);
-
-			MessageBoxManager.Unregister();
-			return choice;
+				NotifyButtons.YesNoCancel,
+				NotifyIcon.Exclamation);
 		}
 
 		static void PrioritizeMergedMod(CustomLoadOrder loadOrder, ModLoadSetting mergedModSetting)
