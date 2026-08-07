@@ -1,0 +1,6 @@
+# Only reviews from listed code owners count toward the required approving
+# review on protected branches (see branch protection settings on `main`).
+# This exists because the repo is public - without it, any GitHub user's
+# approval would count toward the review requirement, not just this project's
+# maintainer(s).
+* @TheValiantOne
