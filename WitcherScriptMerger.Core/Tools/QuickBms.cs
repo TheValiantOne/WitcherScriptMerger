@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -9,6 +10,15 @@ namespace WitcherScriptMerger.Tools
 	{
 		public static string ExePath = AppState.Settings.Get("QuickBmsPath");
 		public static string PluginPath = AppState.Settings.Get("QuickBmsPluginPath");
+
+		// Whether QuickBMS itself (exe + plugin) can be found at all, independent of any
+		// specific bundle file - lets a caller that's about to scan many bundles (e.g.
+		// ModFileIndex.BuildAsync) check once up front instead of hitting
+		// ValidateResources' per-bundle "Can't find QuickBMS..." message once per bundle.
+		// Added for WitcherScriptMerger.Headless, the Linux-capable CLI/MCP-only host,
+		// which has no bundled QuickBMS/wcc_lite at all - see its CLAUDE.md section and
+		// docs/decisions/bundle-format-replacement-spike.md.
+		public static bool IsAvailable => File.Exists(ExePath) && File.Exists(PluginPath);
 
 		public static int UnpackFile(string bundlePath, string contentRelativePath, string outputDir)
 		{
@@ -42,10 +52,18 @@ namespace WitcherScriptMerger.Tools
 			}
 		}
 
+		// Returns Array.Empty<string> (never null) when the bundle or QuickBMS itself
+		// can't be found: callers (ModFileIndex.BuildAsync, FileMerger.GetUnpackedFiles)
+		// enumerate the result directly, and a null here used to be a real NullReferenceException
+		// hazard reachable as soon as a caller stopped gating scans behind
+		// Paths.ValidateDependencyPaths() first - which WitcherScriptMerger.Headless does
+		// deliberately, so flat-file-only merging still works without QuickBMS/wcc_lite
+		// configured. ValidateResources already reports a clear error for why. Flagged in
+		// code review, see CLAUDE.md.
 		public static string[] GetBundleContentPaths(string bundlePath)
 		{
 			if (!ValidateResources(bundlePath))
-				return null;
+				return Array.Empty<string>();
 
 			var contentPaths = new List<string>();
 

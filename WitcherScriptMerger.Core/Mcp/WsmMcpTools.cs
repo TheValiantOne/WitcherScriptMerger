@@ -77,14 +77,21 @@ namespace WitcherScriptMerger.Mcp
 			if (string.IsNullOrWhiteSpace(mergedModName))
 				throw new InvalidOperationException("MergedModName isn't configured in App.config.");
 
-			// ModFile.RelativePath always uses '\' (built via Path.Combine/GetRelativePath
-			// on Windows). A client-supplied relativePaths entry using '/' already passes
-			// IsWithinModsDirectory's scope check (Path.GetFullPath normalizes separators),
-			// but a raw EqualsIgnoreCase against RelativePath below would not - normalize
-			// here so an in-scope path in a different, still-valid separator style doesn't
-			// silently fail to match its own conflict and land in `unmatched` looking like
-			// it was never a conflict at all.
-			var normalizedRelativePaths = relativePaths?.Select(p => p.Replace('/', '\\')).ToArray();
+			// ModFile.RelativePath always uses the host OS's native separator (built via
+			// Path.Combine/GetRelativePath over an OS-walked path - '\' on the WinForms
+			// host, '/' on WitcherScriptMerger.Headless when it's actually running on
+			// Linux). A client-supplied relativePaths entry using the other separator
+			// already passes IsWithinModsDirectory's scope check (Path.GetFullPath
+			// normalizes separators), but a raw EqualsIgnoreCase against RelativePath
+			// below would not - normalize both possible separators to
+			// Path.DirectorySeparatorChar here so an in-scope path in a different, still-
+			// valid separator style doesn't silently fail to match its own conflict and
+			// land in `unmatched` looking like it was never a conflict at all. Hardcoded
+			// to '\\' until this repo's Linux host existed - see ModFile.GetModNameFromPath
+			// for a related, worse bug (an outright crash) from the same wrong assumption.
+			var normalizedRelativePaths = relativePaths?
+				.Select(p => p.Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar))
+				.ToArray();
 
 			lock (_inventoryLock)
 			{
@@ -113,15 +120,16 @@ namespace WitcherScriptMerger.Mcp
 				// orderOverrides keys are matched against conflict.RelativePath elsewhere
 				// (FileMerger.ResolveMergeOrder) via a plain Dictionary lookup, which - built
 				// from JSON with no comparer specified - is ordinal case-sensitive by
-				// default and wouldn't tolerate a '/'-separated key either. Rebuilding it
-				// here (case-insensitive comparer, '\' separators) keeps that lookup
-				// consistent with every other path/name comparison in this codebase, so a
-				// differently-cased or differently-separated but otherwise-correct key
-				// isn't silently ignored.
+				// default and wouldn't tolerate a differently-separated key either.
+				// Rebuilding it here (case-insensitive comparer, normalized to
+				// Path.DirectorySeparatorChar - see normalizedRelativePaths above for why
+				// it's not hardcoded to '\\') keeps that lookup consistent with every other
+				// path/name comparison in this codebase, so a differently-cased or
+				// differently-separated but otherwise-correct key isn't silently ignored.
 				var normalizedOrderOverrides = orderOverrides == null
 					? null
 					: orderOverrides.ToDictionary(
-						kv => kv.Key.Replace('/', '\\'),
+						kv => kv.Key.Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar),
 						kv => kv.Value,
 						StringComparer.OrdinalIgnoreCase);
 
@@ -140,22 +148,35 @@ namespace WitcherScriptMerger.Mcp
 
 		[McpServerTool(Name = "get_status"), Description(
 			"Reports WSM's current configuration and dependency status: resolved game/mods " +
-			"directories, whether KDiff3/QuickBMS/wcc_lite are all found, the configured " +
-			"merged-mod name, and the current conflict count.")]
+			"directories, whether the text-merge engine (KDiff3 or DiffPlex) and QuickBMS/" +
+			"wcc_lite are found, the configured merged-mod name, and the current conflict " +
+			"count. textMergeDependenciesValid alone is enough for flat-file (.ws/.xml) " +
+			"conflicts; bundleDependenciesValid additionally gates bundle-content conflicts " +
+			"- a host with no QuickBMS/wcc_lite configured can still scan/merge flat-file " +
+			"conflicts with only the former true.")]
 		public static object GetStatus()
 		{
-			var dependenciesValid = Paths.ValidateDependencyPaths();
+			// Split rather than the combined Paths.ValidateDependencyPaths() so a host
+			// without QuickBMS/wcc_lite (e.g. WitcherScriptMerger.Headless) doesn't report a
+			// conflictCount of 0 just because bundle tooling is missing - see
+			// RequireDependenciesAndModsDirectory below for the same split applied to
+			// scan_conflicts/merge_conflicts. dependenciesValid is kept for existing callers
+			// that only checked the combined flag.
+			var textMergeDependenciesValid = Paths.ValidateTextMergeDependencies();
+			var bundleDependenciesValid = Paths.ValidateBundleDependencies();
 			var modsDirectoryExists = Directory.Exists(Paths.ModsDirectory);
 
 			var conflictCount = 0;
-			if (dependenciesValid && modsDirectoryExists)
+			if (textMergeDependenciesValid && modsDirectoryExists)
 				conflictCount = MergeOperations.ScanConflicts().Conflicts.Count();
 
 			return new
 			{
 				gameDirectory = Paths.GameDirectory,
 				modsDirectory = Paths.ModsDirectory,
-				dependenciesValid,
+				dependenciesValid = textMergeDependenciesValid && bundleDependenciesValid,
+				textMergeDependenciesValid,
+				bundleDependenciesValid,
 				modsDirectoryExists,
 				mergedModName = AppState.Settings.Get("MergedModName"),
 				conflictCount,
@@ -177,11 +198,22 @@ namespace WitcherScriptMerger.Mcp
 			}).ToArray();
 		}
 
+		// Only the text-merge engine is required to let scan_conflicts/merge_conflicts run
+		// at all - not QuickBMS/wcc_lite too. That used to be one combined
+		// Paths.ValidateDependencyPaths() check, which meant a host with no QuickBMS/
+		// wcc_lite configured (WitcherScriptMerger.Headless) could never scan or merge
+		// even its supported flat-file (.ws/.xml) conflicts. This is a behavior relaxation
+		// for the WinForms host's MCP mode too, not just the new host - see CLAUDE.md and
+		// the PR that introduced this split. Bundle-category conflicts still fail
+		// gracefully per-conflict when QuickBMS/wcc_lite aren't available (see
+		// QuickBms.IsAvailable's callers, ModFileIndex.BuildAsync, and
+		// FileMerger.GetUnpackedFiles) rather than being silently attempted and left
+		// looking like a hard requirement was still being enforced here.
 		static void RequireDependenciesAndModsDirectory()
 		{
-			if (!Paths.ValidateDependencyPaths())
+			if (!Paths.ValidateTextMergeDependencies())
 				throw new InvalidOperationException(
-					"A required dependency (KDiff3, QuickBMS, or wcc_lite) is missing. Configure its path in App.config.");
+					"The configured text-merge engine (KDiff3 or DiffPlex) is missing or misconfigured.");
 
 			if (!Directory.Exists(Paths.ModsDirectory))
 				throw new InvalidOperationException("Mods directory not found - check GameDirectory/ModsDirectory in App.config.");

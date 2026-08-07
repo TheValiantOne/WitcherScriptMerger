@@ -96,7 +96,16 @@ namespace WitcherScriptMerger.FileIndex
 
 			var nameStart = Paths.ModsDirectory.Length + 1;
 			var name = modFilePath.Substring(nameStart);
-			return name.Substring(0, name.IndexOf('\\'));
+
+			// Path.DirectorySeparatorChar, not a hardcoded '\\': modFilePath is built via
+			// Path.Combine (directly or through Paths.GetRelativePath's substring logic
+			// over an OS-walked path), which uses '/' on Linux - confirmed by direct
+			// crash repro under WSL2 (WitcherScriptMerger.Headless, the Linux-capable
+			// host, running a real merge): the old hardcoded '\\' made IndexOf return -1
+			// on every Linux path, throwing ArgumentOutOfRangeException from the
+			// Substring call below on literally every flat-file merge attempt. Flagged in
+			// code review, see CLAUDE.md.
+			return name.Substring(0, name.IndexOf(Path.DirectorySeparatorChar));
 		}
 
 		public static bool IsScript(string path) => path.EndsWithIgnoreCase(".ws");
