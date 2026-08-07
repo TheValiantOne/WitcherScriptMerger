@@ -5,10 +5,10 @@ using System.Linq;
 
 namespace WitcherScriptMerger.Tools
 {
-	static class QuickBms
+	public static class QuickBms
 	{
-		public static string ExePath = Program.Settings.Get("QuickBmsPath");
-		public static string PluginPath = Program.Settings.Get("QuickBmsPluginPath");
+		public static string ExePath = AppState.Settings.Get("QuickBmsPath");
+		public static string PluginPath = AppState.Settings.Get("QuickBmsPluginPath");
 
 		public static int UnpackFile(string bundlePath, string contentRelativePath, string outputDir)
 		{
@@ -34,7 +34,7 @@ namespace WitcherScriptMerger.Tools
 						output = output.Substring(outputStart);
 						errorMsg += "\n\n" + output;
 					}
-					Program.Notifier.ShowError(errorMsg);
+					AppState.Notifier.ShowError(errorMsg);
 					return 1;
 				}
 
@@ -69,17 +69,17 @@ namespace WitcherScriptMerger.Tools
 		{
 			if (!File.Exists(bundlePath))
 			{
-				Program.Notifier.ShowError("Can't find bundle file:\n\n" + bundlePath, "Missing Bundle");
+				AppState.Notifier.ShowError("Can't find bundle file:\n\n" + bundlePath, "Missing Bundle");
 				return false;
 			}
 			if (!File.Exists(ExePath))
 			{
-				Program.Notifier.ShowError("Can't find QuickBMS at this location:\n\n" + ExePath, "Missing QuickBMS");
+				AppState.Notifier.ShowError("Can't find QuickBMS at this location:\n\n" + ExePath, "Missing QuickBMS");
 				return false;
 			}
 			if (!File.Exists(PluginPath))
 			{
-				Program.Notifier.ShowError("Can't find QuickBMS plugin at this location:\n\n" + PluginPath, "Missing QuickBMS Plugin");
+				AppState.Notifier.ShowError("Can't find QuickBMS plugin at this location:\n\n" + PluginPath, "Missing QuickBMS Plugin");
 				return false;
 			}
 			return true;

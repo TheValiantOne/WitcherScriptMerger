@@ -3,15 +3,15 @@ using System.IO;
 
 namespace WitcherScriptMerger.Tools
 {
-	static class WccLite
+	public static class WccLite
 	{
-		public static string ExePath = Program.Settings.Get("WccLitePath");
+		public static string ExePath = AppState.Settings.Get("WccLitePath");
 
 		public static int PackBundle(string sourceDir, string outputDir)
 		{
 			if (!Directory.Exists(sourceDir))
 			{
-				Program.Notifier.ShowError("Can't find content directory to pack into bundle:\n\n" + sourceDir, "Missing Directory");
+				AppState.Notifier.ShowError("Can't find content directory to pack into bundle:\n\n" + sourceDir, "Missing Directory");
 				return 1;
 			}
 
@@ -33,7 +33,7 @@ namespace WitcherScriptMerger.Tools
 		{
 			if (!File.Exists(ExePath))
 			{
-				Program.Notifier.ShowError("Can't find wcc_lite at this location:\n\n" + ExePath, "Missing wcc_lite");
+				AppState.Notifier.ShowError("Can't find wcc_lite at this location:\n\n" + ExePath, "Missing wcc_lite");
 				return 1;
 			}
 
@@ -61,7 +61,7 @@ namespace WitcherScriptMerger.Tools
 					errorMsg = stdOutput;
 				if (errorMsg != null)
 				{
-					Program.Notifier.ShowError(failureMsg + "\n\n" + errorMsg);
+					AppState.Notifier.ShowError(failureMsg + "\n\n" + errorMsg);
 					return 1;
 				}
 			}

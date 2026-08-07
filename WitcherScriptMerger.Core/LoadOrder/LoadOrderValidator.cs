@@ -1,9 +1,8 @@
 ﻿using System.Linq;
-using System.Windows.Forms;
 
 namespace WitcherScriptMerger.LoadOrder
 {
-	static class LoadOrderValidator
+	public static class LoadOrderValidator
 	{
 		public static void ValidateAndFix(CustomLoadOrder loadOrder)
 		{
@@ -17,43 +16,46 @@ namespace WitcherScriptMerger.LoadOrder
 				return;
 
 			var choice = PromptToPrioritizeMergedMod(loadOrder.FilePath);
-			if (choice == DialogResult.Yes)
+			if (choice == NotifyResult.Yes)
 			{
 				PrioritizeMergedMod(loadOrder, mergedMod);
 			}
-			else if (choice == DialogResult.Cancel && Program.Notifier.IsInteractive)  // Never
+			else if (choice == NotifyResult.Cancel)  // Never
 			{
-				// IsInteractive guard: HeadlessMergeNotifier's fixed default for
-				// YesNoCancel is Cancel, which would otherwise persist this setting
-				// on every headless run that reaches here.
-				Program.Settings.Set("ValidateCustomLoadOrder", false);
-				Program.Settings.Save();
+				AppState.Settings.Set("ValidateCustomLoadOrder", false);
+				AppState.Settings.Save();
 			}
 		}
 
-		static DialogResult PromptToPrioritizeMergedMod(string modsSettingsPath)
+		// Routed through IMergeNotifier rather than a direct MessageBox.Show(...) call
+		// (as this used before the Core/host project split) since Core can't reference
+		// System.Windows.Forms at all.
+		//
+		// Before the split, the direct MessageBox.Show(...) call used
+		// MessageBoxManager to relabel the Cancel button "Ne&ver", because Cancel's
+		// real effect here is destructive and permanent (ValidateAndFix's Cancel
+		// branch below sets ValidateCustomLoadOrder=false and saves it to App.config -
+		// this prompt is never shown again after that). IMergeNotifier has no hook
+		// for relabeling a button (and MessageBoxManager's relabeling was almost
+		// certainly already silently broken even before this split - it hooks via
+		// AppDomain.GetCurrentThreadId(), a deprecated API that doesn't reliably
+		// return the real Win32 thread ID SetWindowsHookEx needs). Either way, a
+		// plain-captioned "Cancel" button carries none of that "this is permanent"
+		// signal on its own, so the warning is now spelled out in the message body
+		// instead, where it doesn't depend on any button-relabeling mechanism working.
+		static NotifyResult PromptToPrioritizeMergedMod(string modsSettingsPath)
 		{
-			// Known, accepted regression: the Cancel button used to be relabeled
-			// "Ne&ver" via MessageBoxManager.Register()/Unregister(), which worked
-			// only because the old MessageBox.Show call ran on the same background
-			// thread (Register()'s SetWindowsHookEx is thread-affine) as this
-			// method. Program.Notifier.ShowMessage (MainForm.ShowMessage) Invokes
-			// the actual MessageBox.Show onto the UI thread, so that hook can no
-			// longer see the dialog's window messages - relabeling can't be
-			// preserved without adding custom button-text support to
-			// IMergeNotifier, which is out of scope here. The Cancel button now
-			// reads "Cancel"; clicking it still permanently disables this check
-			// (see the IsInteractive-guarded branch above), just without a label
-			// saying so. DialogResult semantics and this method's return value are
-			// otherwise unchanged.
-			return Program.Notifier.ShowMessage(
+			return AppState.Notifier.ShowMessage(
 				$"{modsSettingsPath}\n\n" +
 				"Detected custom load order in the file above, and merged files aren't configured to load first.\n\n" +
-				"Would you like Script Merger to modify your custom load order so that your merged files have top priority?",
+				"Would you like Script Merger to modify your custom load order so that your merged files have top priority?\n\n" +
+				"Yes: fix it now.\n" +
+				"No: leave it as-is for now; you'll be asked again next time.\n" +
+				"Cancel: NEVER ask again - permanently disables this check.",
 				"Custom Load Order Problem",
-				MessageBoxButtons.YesNoCancel,
-				MessageBoxIcon.Exclamation,
-				MessageBoxDefaultButton.Button2);
+				NotifyButtons.YesNoCancel,
+				DialogIcon.Exclamation,
+				NotifyResult.No);
 		}
 
 		static void PrioritizeMergedMod(CustomLoadOrder loadOrder, ModLoadSetting mergedModSetting)

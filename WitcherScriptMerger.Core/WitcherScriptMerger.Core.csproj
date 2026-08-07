@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>WitcherScriptMerger</RootNamespace>
+    <AssemblyName>WitcherScriptMerger.Core</AssemblyName>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <!-- Same ruleset the host project uses (CA1801/CA1804/CA1811/CA1812/CA1823 -
+         unused parameters/locals/private types/members) - without this, the ~20
+         files that moved here from the host project during the Core/host split
+         (FileMerger, ModFileIndex, CustomLoadOrder, Paths, the Tools/ wrappers,
+         etc.) would silently drop out of dead-code analysis instead of keeping it. -->
+    <CodeAnalysisRuleSet>..\WitcherScriptMerger\DeadCodeDetection.ruleset</CodeAnalysisRuleSet>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ModelContextProtocol" Version="2.1.0" />
+    <PackageReference Include="System.Configuration.ConfigurationManager" Version="9.0.0" />
+    <PackageReference Include="System.IO.Hashing" Version="9.0.0" />
+  </ItemGroup>
+
+</Project>

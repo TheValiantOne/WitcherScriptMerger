@@ -13,6 +13,8 @@ using WitcherScriptMerger.Cli;
 using WitcherScriptMerger.Forms;
 using WitcherScriptMerger.Inventory;
 using WitcherScriptMerger.LoadOrder;
+using WitcherScriptMerger.Mcp;
+using WitcherScriptMerger.Tools;
 
 namespace WitcherScriptMerger
 {
@@ -23,13 +25,39 @@ namespace WitcherScriptMerger
 		// invoking terminal instead of written to an unattached console.
 		static readonly bool _consoleAttached = MaybeAttachConsole();
 
-		// Defaults to the headless implementation so it's safe to use from the
-		// very first line of Main() - the GUI path swaps it out for MainForm
-		// once constructed. See CLAUDE.md's IMergeNotifier section.
-		public static IMergeNotifier Notifier = new HeadlessMergeNotifier();
-		public static AppSettings Settings = new AppSettings();
-		public static CustomLoadOrder LoadOrder = null;
-		public static MergeInventory Inventory = null;
+		// Explicit (empty) static constructor: without one, the C# compiler marks
+		// this class `beforefieldinit`, under which the CLR is free to defer running
+		// _consoleAttached's initializer until Program's own static fields are first
+		// touched - Main() itself no longer counts, since Notifier/Settings/LoadOrder/
+		// Inventory became pass-through properties to AppState (see below) rather than
+		// fields, so nothing in Main() necessarily touches a field of this class at
+		// all. Confirmed empirically with a minimal repro mirroring this exact shape:
+		// without this constructor, the field initializer's side effect (here,
+		// MaybeAttachConsole()) never ran at all during a normal Main() invocation.
+		// Do not remove this without re-verifying that repro.
+		static Program() { }
+
+		// Notifier/Settings/LoadOrder/Inventory live in Core's AppState now, not here -
+		// domain code that moved to Core (Paths, FileMerger, Cli/MergeOperations,
+		// Mcp/WsmMcpTools, ...) needs them, and Core can never reference this host
+		// assembly (see AppState.cs). These pass-through properties keep every
+		// existing Program.X call site in this project unchanged.
+		public static IMergeNotifier Notifier
+		{
+			get => AppState.Notifier;
+			set => AppState.Notifier = value;
+		}
+		public static AppSettings Settings => AppState.Settings;
+		public static CustomLoadOrder LoadOrder
+		{
+			get => AppState.LoadOrder;
+			set => AppState.LoadOrder = value;
+		}
+		public static MergeInventory Inventory
+		{
+			get => AppState.Inventory;
+			set => AppState.Inventory = value;
+		}
 		public static MainForm MainForm;
 
 		/// <summary>
@@ -38,6 +66,12 @@ namespace WitcherScriptMerger
 		[STAThread]
 		static void Main(string[] args)
 		{
+			// The one real IMergeEngine implementation, supplied here since it needs
+			// Tools/KDiff3.cs's Win32 P/Invoke (host-only) - see Tools/IMergeEngine.cs.
+			// Must be set before anything calls Paths.ValidateDependencyPaths() or
+			// constructs a FileMerger, in any of the GUI/CLI/MCP paths below.
+			AppState.MergeEngine = new KDiff3MergeEngine();
+
 			if (args.Length > 0)
 			{
 				Environment.ExitCode = RunCli(args);
@@ -223,10 +257,15 @@ namespace WitcherScriptMerger
 			// stdout is reserved for MCP protocol frames - all logging must go to stderr.
 			builder.Logging.AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);
 
+			// WsmMcpTools now lives in WitcherScriptMerger.Core, not this (entry/calling)
+			// assembly - the parameterless WithToolsFromAssembly() overload only scans
+			// the calling assembly, which would silently register zero tools (server
+			// starts, `initialize` succeeds, `tools/list` returns an empty array) if
+			// left as-is. Pass the Core assembly explicitly.
 			builder.Services
 				.AddMcpServer()
 				.WithStdioServerTransport()
-				.WithToolsFromAssembly();
+				.WithToolsFromAssembly(typeof(WsmMcpTools).Assembly);
 
 			builder.Build().RunAsync().GetAwaiter().GetResult();
 			return 0;

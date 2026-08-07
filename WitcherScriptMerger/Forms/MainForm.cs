@@ -18,8 +18,6 @@ namespace WitcherScriptMerger.Forms
 
 		public string GameDirectorySetting => txtGameDir.Text;
 
-		public bool IsInteractive => true;
-
 		ModFileIndex _modIndex = null;
 
 		#endregion
@@ -350,11 +348,11 @@ namespace WitcherScriptMerger.Forms
 				? "Remove from Merges list & repack merged bundle?"
 				: "Remove from Merges list?";
 
-			return (DialogResult.Yes == ShowMessage(
+			return (NotifyResult.Yes == ShowMessage(
 				msg,
 				"Missing Merge Inventory File",
-				MessageBoxButtons.YesNo,
-				MessageBoxIcon.Question));
+				NotifyButtons.YesNo,
+				DialogIcon.Question));
 		}
 
 		bool ConfirmDeleteMergeForMissingMod(Merge merge, string modName)
@@ -371,11 +369,11 @@ namespace WitcherScriptMerger.Forms
 				? "Delete this affected merge & repack the merged bundle?"
 				: "Delete this affected merge?";
 
-			return (DialogResult.Yes == ShowMessage(
+			return (NotifyResult.Yes == ShowMessage(
 				msg,
 				"Missing Merge Inventory File",
-				MessageBoxButtons.YesNo,
-				MessageBoxIcon.Question));
+				NotifyButtons.YesNo,
+				DialogIcon.Question));
 		}
 
 		bool ConfirmDeleteMergeForDisabledMod(Merge merge, string modName)
@@ -386,11 +384,11 @@ namespace WitcherScriptMerger.Forms
 				merge.RelativePath + "\n        " +
 				string.Join("\n        ", merge.Mods.Select(mod => mod.Name));
 
-			return (DialogResult.Yes == ShowMessage(
+			return (NotifyResult.Yes == ShowMessage(
 				msg,
 				"Disabled Mod in Merge",
-				MessageBoxButtons.YesNo,
-				MessageBoxIcon.Question));
+				NotifyButtons.YesNo,
+				DialogIcon.Question));
 		}
 
 		private DialogResult PromptToDeleteForChangedHash(Merge merge, string modFilePath, string modName)
@@ -657,7 +655,7 @@ namespace WitcherScriptMerger.Forms
 
 			Program.Inventory = MergeInventory.Load(Paths.Inventory);
 
-			var merger = new FileMerger(Program.Inventory, OnMergeProgressChanged, OnMergeComplete);
+			var merger = new InteractiveMergeRunner(Program.Inventory, OnMergeProgressChanged, OnMergeComplete);
 
 			var fileNodes = treConflicts.FileNodes.Where(node => node.GetTreeNodes().Count(modNode => modNode.Checked) > 1);
 
@@ -807,7 +805,7 @@ namespace WitcherScriptMerger.Forms
 			{
 				InitializeProgressScreen("Merge Deleted");
 
-				new FileMerger(Program.Inventory, OnMergeProgressChanged, OnMergeComplete)
+				new InteractiveMergeRunner(Program.Inventory, OnMergeProgressChanged, OnMergeComplete)
 					.RepackBundleAsync(bundlePath);
 			}
 		}
@@ -879,30 +877,42 @@ namespace WitcherScriptMerger.Forms
 
 		#region Cross-thread Operations
 
-		public DialogResult ShowMessage(string text,
+		// IMergeNotifier is defined in Core against neutral NotifyResult/NotifyButtons/
+		// DialogIcon types (Core can't reference System.Windows.Forms at all - see
+		// IMergeNotifier.cs) - this translates to/from the real WinForms MessageBox
+		// around the actual MessageBox.Show(...) call.
+		public NotifyResult ShowMessage(string text,
 			string title = "",
-			MessageBoxButtons buttons = MessageBoxButtons.OK,
-			MessageBoxIcon icon = MessageBoxIcon.None,
-			MessageBoxDefaultButton defaultButton = MessageBoxDefaultButton.Button1)
+			NotifyButtons buttons = NotifyButtons.OK,
+			DialogIcon icon = DialogIcon.None,
+			NotifyResult defaultResult = NotifyResult.None)
 		{
 			this.ActivateSafely();
 
+			var nativeButtons = ToNative(buttons);
+			var nativeIcon = ToNative(icon);
+			var nativeDefault = ToNativeDefaultButton(buttons, defaultResult);
+
 			if (this.InvokeRequired)
 			{
-				return (DialogResult)this.Invoke(new Func<DialogResult>(
-					() => { return MessageBox.Show(this, text, title, buttons, icon, defaultButton); }));
+				return ToNeutral((DialogResult)this.Invoke(new Func<DialogResult>(
+					() => { return MessageBox.Show(this, text, title, nativeButtons, nativeIcon, nativeDefault); })));
 			}
 			else
 			{
-				return MessageBox.Show(this, text, title, buttons, icon, defaultButton);
+				return ToNeutral(MessageBox.Show(this, text, title, nativeButtons, nativeIcon, nativeDefault));
 			}
 		}
 
-		public DialogResult ShowError(string text, string title = "Error")
+		public NotifyResult ShowError(string text, string title = "Error")
 		{
-			return ShowMessage(text, title, MessageBoxButtons.OK, MessageBoxIcon.Error);
+			return ShowMessage(text, title, NotifyButtons.OK, DialogIcon.Error);
 		}
 
+		// Not part of IMergeNotifier - see IMergeNotifier.cs for why ShowModal was
+		// dropped from that interface during the Core split. Every caller (report-form
+		// popups, the Dependencies/Options menu commands below) is GUI-only code that
+		// already lives in this project, so it calls this directly instead.
 		public DialogResult ShowModal(Form form)
 		{
 			this.ActivateSafely();
@@ -932,6 +942,86 @@ namespace WitcherScriptMerger.Forms
 			}
 			else
 				this.Activate();
+		}
+
+		static MessageBoxButtons ToNative(NotifyButtons buttons)
+		{
+			return buttons switch
+			{
+				NotifyButtons.OK => MessageBoxButtons.OK,
+				NotifyButtons.OKCancel => MessageBoxButtons.OKCancel,
+				NotifyButtons.AbortRetryIgnore => MessageBoxButtons.AbortRetryIgnore,
+				NotifyButtons.YesNoCancel => MessageBoxButtons.YesNoCancel,
+				NotifyButtons.YesNo => MessageBoxButtons.YesNo,
+				NotifyButtons.RetryCancel => MessageBoxButtons.RetryCancel,
+				_ => MessageBoxButtons.OK,
+			};
+		}
+
+		static MessageBoxIcon ToNative(DialogIcon icon)
+		{
+			return icon switch
+			{
+				DialogIcon.None => MessageBoxIcon.None,
+				DialogIcon.Warning => MessageBoxIcon.Warning,
+				DialogIcon.Error => MessageBoxIcon.Error,
+				DialogIcon.Exclamation => MessageBoxIcon.Exclamation,
+				DialogIcon.Information => MessageBoxIcon.Information,
+				DialogIcon.Question => MessageBoxIcon.Question,
+				_ => MessageBoxIcon.None,
+			};
+		}
+
+		// MessageBoxDefaultButton is positional (Button1/2/3), but IMergeNotifier's
+		// callers think in terms of which *result* they want pre-focused (e.g. "No"),
+		// not which position it happens to occupy in a given button set - so this
+		// finds preferred's position within the actual button set being shown.
+		// NotifyResult.None means "no preference", which keeps WinForms' own default
+		// (Button1) exactly as every pre-existing ShowMessage call site already got.
+		static MessageBoxDefaultButton ToNativeDefaultButton(NotifyButtons buttons, NotifyResult preferred)
+		{
+			if (preferred == NotifyResult.None)
+				return MessageBoxDefaultButton.Button1;
+
+			var order = ButtonOrder(buttons);
+			var index = Array.IndexOf(order, preferred);
+			return index switch
+			{
+				1 => MessageBoxDefaultButton.Button2,
+				2 => MessageBoxDefaultButton.Button3,
+				_ => MessageBoxDefaultButton.Button1,  // index 0, or not found in this button set
+			};
+		}
+
+		// The order WinForms actually lays these buttons out left-to-right.
+		static NotifyResult[] ButtonOrder(NotifyButtons buttons)
+		{
+			return buttons switch
+			{
+				NotifyButtons.OK => new[] { NotifyResult.OK },
+				NotifyButtons.OKCancel => new[] { NotifyResult.OK, NotifyResult.Cancel },
+				NotifyButtons.AbortRetryIgnore => new[] { NotifyResult.Abort, NotifyResult.Retry, NotifyResult.Ignore },
+				NotifyButtons.YesNoCancel => new[] { NotifyResult.Yes, NotifyResult.No, NotifyResult.Cancel },
+				NotifyButtons.YesNo => new[] { NotifyResult.Yes, NotifyResult.No },
+				NotifyButtons.RetryCancel => new[] { NotifyResult.Retry, NotifyResult.Cancel },
+				_ => new[] { NotifyResult.OK },
+			};
+		}
+
+		static NotifyResult ToNeutral(DialogResult result)
+		{
+			return result switch
+			{
+				DialogResult.None => NotifyResult.None,
+				DialogResult.OK => NotifyResult.OK,
+				DialogResult.Cancel => NotifyResult.Cancel,
+				DialogResult.Abort => NotifyResult.Abort,
+				DialogResult.Retry => NotifyResult.Retry,
+				DialogResult.Ignore => NotifyResult.Ignore,
+				DialogResult.Yes => NotifyResult.Yes,
+				DialogResult.No => NotifyResult.No,
+				_ => NotifyResult.None,
+			};
 		}
 
 		#endregion
@@ -977,7 +1067,7 @@ namespace WitcherScriptMerger.Forms
 			{
 				InitializeProgressScreen($"Repacking Bundle{mergedBundleCount.GetPluralS()}");
 
-				new FileMerger(Program.Inventory, OnMergeProgressChanged, OnMergeComplete)
+				new InteractiveMergeRunner(Program.Inventory, OnMergeProgressChanged, OnMergeComplete)
 					.RepackBundleAsync(bundlePath);
 			}
 		}

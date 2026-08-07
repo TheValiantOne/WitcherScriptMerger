@@ -1,6 +1,6 @@
 ﻿namespace WitcherScriptMerger.LoadOrder
 {
-	class ModLoadSetting
+	public class ModLoadSetting
 	{
 		public string ModName { get; set; }
 

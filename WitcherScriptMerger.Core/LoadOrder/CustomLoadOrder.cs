@@ -7,7 +7,7 @@ using System.Text.RegularExpressions;
 
 namespace WitcherScriptMerger.LoadOrder
 {
-	class CustomLoadOrder
+	public class CustomLoadOrder
 	{
 		public const int TopPriority = 0;
 		public const int BottomPriority = 9999;
@@ -152,11 +152,11 @@ namespace WitcherScriptMerger.LoadOrder
 
 		void ShowWarningForMalformedFile(string reason)
 		{
-			Program.Notifier.ShowMessage(
+			AppState.Notifier.ShowMessage(
 				"Your mods.settings file is invalid.\n\n" + reason,
 				"Invalid Load Order File",
-				System.Windows.Forms.MessageBoxButtons.OK,
-				System.Windows.Forms.MessageBoxIcon.Warning);
+				NotifyButtons.OK,
+				DialogIcon.Warning);
 		}
 
 		public void Save()
