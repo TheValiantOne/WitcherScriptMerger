@@ -33,18 +33,27 @@ namespace WitcherScriptMerger.LoadOrder
 
 		static DialogResult PromptToPrioritizeMergedMod(string modsSettingsPath)
 		{
-			// Cancel button reads "Cancel", not "Never" - the old MessageBoxManager
-			// relabel hook was thread-affine and can't survive ShowMessage's Invoke.
-			// DialogResult semantics (and PromptToPrioritizeMergedMod's return value)
-			// are unchanged.
+			// Known, accepted regression: the Cancel button used to be relabeled
+			// "Ne&ver" via MessageBoxManager.Register()/Unregister(), which worked
+			// only because the old MessageBox.Show call ran on the same background
+			// thread (Register()'s SetWindowsHookEx is thread-affine) as this
+			// method. Program.Notifier.ShowMessage (MainForm.ShowMessage) Invokes
+			// the actual MessageBox.Show onto the UI thread, so that hook can no
+			// longer see the dialog's window messages - relabeling can't be
+			// preserved without adding custom button-text support to
+			// IMergeNotifier, which is out of scope here. The Cancel button now
+			// reads "Cancel"; clicking it still permanently disables this check
+			// (see the IsInteractive-guarded branch above), just without a label
+			// saying so. DialogResult semantics and this method's return value are
+			// otherwise unchanged.
 			return Program.Notifier.ShowMessage(
 				$"{modsSettingsPath}\n\n" +
 				"Detected custom load order in the file above, and merged files aren't configured to load first.\n\n" +
 				"Would you like Script Merger to modify your custom load order so that your merged files have top priority?",
 				"Custom Load Order Problem",
-				System.Windows.Forms.MessageBoxButtons.YesNoCancel,
-				System.Windows.Forms.MessageBoxIcon.Exclamation,
-				System.Windows.Forms.MessageBoxDefaultButton.Button2);
+				MessageBoxButtons.YesNoCancel,
+				MessageBoxIcon.Exclamation,
+				MessageBoxDefaultButton.Button2);
 		}
 
 		static void PrioritizeMergedMod(CustomLoadOrder loadOrder, ModLoadSetting mergedModSetting)
