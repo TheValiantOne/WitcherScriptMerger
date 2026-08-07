@@ -104,7 +104,10 @@ namespace WitcherScriptMerger.Tools
 		// including NBSP - silently undoing this class's whole stated reason for using a
 		// narrow ASCII-only regex in the first place, but only at the leading/trailing
 		// edges of the joined, collapsed text (WhitespaceRun itself was always correctly
-		// ASCII-only for internal runs). Concretely: oldPieces=["Hello "],
+		// ASCII-only for internal runs). Concretely: oldPieces=["Hello\u00A0"] (a literal
+		// U+00A0 NBSP, written out explicitly here since it's visually indistinguishable
+		// from a plain space in most editors/diffs - the same reason the regression test
+		// for this uses the same \u00A0 escape rather than a literal character),
 		// newPieces=["Hello"] collapse to the same "Hello" after Trim() strips the edge
 		// NBSP, silently auto-resolving as whitespace-only a case that should stay a
 		// genuine conflict - exactly the NBSP-vs-space content-loss scenario the comment
@@ -129,13 +132,16 @@ namespace WitcherScriptMerger.Tools
 		// dryRun parameter): a dry run's whole contract is "preview only, no side effects
 		// a user didn't ask for" (the MCP merge_conflicts tool's own dryRun description
 		// promises no merged output, bundle repack, or MergeInventory.xml write), and
-		// FileOpener.Open launching a real editor/process is exactly that kind of surprise
-		// side effect for an operation whose entire point is to be inspectable without
-		// consequence. The conflict-marker sidecar itself is still written either way
-		// (pre-existing behavior, not something this parameter changes) - only the
-		// auto-open is conditional, since that's the specific side effect that turns a
-		// preview into something visibly disruptive (an editor window popping up per
-		// conflict for a mods folder with many of them).
+		// FileOpener.Open launching a real process is exactly that kind of surprise side
+		// effect for an operation whose entire point is to be inspectable without
+		// consequence - whatever the OS resolves that launch to, an editor if ".conflict"
+		// has an association or its own "how do you want to open this?" picker if not
+		// (confirmed both are possible - see MergeHeadless's own comment below). The
+		// conflict-marker sidecar itself is still written either way (pre-existing
+		// behavior, not something this parameter changes) - only the auto-open is
+		// conditional, since that's the specific side effect that turns a preview into
+		// something visibly disruptive (a window popping up per conflict for a mods
+		// folder with many of them).
 		public MergeEngineResult MergeHeadless(
 			FileMerger.MergeSource source1,
 			FileMerger.MergeSource source2,
@@ -262,14 +268,21 @@ namespace WitcherScriptMerger.Tools
 
 			// Opened BEFORE the notifier message, deliberately reordered from an earlier
 			// version of this method (code review caught the problem with the original
-			// order): the message needs to say whether the file actually opened, and
-			// FileOpener.Open's own bool return is exactly that signal - a stock machine
-			// with no default association for ".conflict" makes Process.Start either
-			// throw ERROR_NO_ASSOCIATION (swallowed by FileOpener.TryOpen's own catch,
-			// returning false) or raise the OS "how do you want to open this?" picker, and
-			// the message would otherwise unconditionally claim "attempting to open it
-			// now" regardless of what actually happened. Best-effort either way: a failed
-			// open doesn't change the result below, the sidecar is on disk regardless.
+			// order): the message needs FileOpener.Open's own bool return to pick its
+			// wording, which requires calling it first. That bool distinguishes only
+			// "Process.Start succeeded" from "Process.Start threw" (e.g.
+			// ERROR_NO_ASSOCIATION, swallowed by FileOpener.TryOpen's own catch, returning
+			// false) - it is NOT a guarantee an editor actually came up. Confirmed
+			// empirically during this feature's own end-to-end verification: on the
+			// machine used for testing, ".conflict" had no registered file association, so
+			// Process.Start succeeded by launching OpenWith.exe (the OS's own "how do you
+			// want to open this file?" picker) - opened came back true, and the message
+			// below says "opened it for review" by its own definition of "opened" (the
+			// call didn't fail), even though what the user actually sees is a picker
+			// dialog, not directly an editor. Still strictly more honest than an
+			// unconditional "attempting to open it now" regardless of outcome, which is
+			// what this message used to say. Best-effort either way: a failed open doesn't
+			// change the result below, the sidecar is on disk regardless.
 			// Skipped entirely for a dry run (openConflictMarkers = false - see this
 			// method's parameter comment), which also means dryRun's message always uses
 			// the "open it manually" wording, never claims an open that was never
