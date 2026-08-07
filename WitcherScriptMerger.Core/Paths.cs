@@ -9,6 +9,22 @@ namespace WitcherScriptMerger
 		public const string TempBundleContent = "tempbundlecontent";
 		public static string MergedBundleContent = "Merged Bundle Content";
 		public static string MergedBundleContentAbsolute = Path.Combine(Environment.CurrentDirectory, MergedBundleContent);
+
+		// A dedicated top-level directory for DiffPlexMergeEngine's conflict-marker
+		// sidecar files (Tools/DiffPlexMergeEngine.cs::GetConflictMarkerPath) -
+		// deliberately NOT a subdirectory of TempBundleContent, even though both are
+		// "scratch-ish" locations conceptually: FileMerger.CleanUpTempFiles() deletes
+		// the entire TempBundleContent tree wholesale at the end of every headless
+		// merge run (to clear QuickBMS-unpacked bundle scratch content), which would
+		// otherwise delete every sidecar moments after DiffPlexMergeEngine wrote it -
+		// confirmed by direct observation running the real CLI end-to-end: the sidecar
+		// briefly existed during the run (the "conflict markers written to..." message
+		// printed a real path) but was gone by the time the process exited. A separate,
+		// unrelated top-level name sidesteps that collision entirely while keeping the
+		// same original benefits (out of the live Paths.ModsDirectory tree, out of
+		// Paths.MergedBundleContent's wholesale-packed tree - see DiffPlexMergeEngine's
+		// own comment on GetConflictMarkerPath for those two reasons).
+		public const string DiffPlexConflictsDirectory = "DiffPlexConflicts";
 		public const string Inventory = "MergeInventory.xml";
 		public static string ModScriptBase = Path.Combine("content", "scripts");
 		public static string VanillaScriptBase = Path.Combine("content", "content0", "scripts");
@@ -22,31 +38,43 @@ namespace WitcherScriptMerger
 
 		public static string DlcDirectory => Path.Combine(GameDirectory, "DLC");
 
-		static string _scriptsDirSetting = AppState.Settings.Get("VanillaScriptsDirectory");
+		// Deliberately not cached in a static field (as these two used to be): a field
+		// initializer here would run alongside every other static field initializer of
+		// this type on first touch of ANY of them (C#'s beforefieldinit semantics),
+		// which would eagerly call AppState.Settings.Get(...) - forcing
+		// AppState.Settings to construct (see its own lazy-property comment in
+		// AppState.cs) merely from touching an unrelated static member of Paths, e.g. a
+		// plain string helper like GetRelativePath with no settings dependency at all.
+		// That's exactly the crash-in-a-dotnet-test-host scenario AppState.Settings'
+		// laziness exists to avoid, one hop removed - flagged in code review, see
+		// CLAUDE.md. AppState.Settings.Get(...) already reads from AppSettings' own
+		// cached ConfigurationManager state, so re-reading it on every call here (rather
+		// than caching again at this layer) costs nothing meaningful.
 		public static string ScriptsDirectory
 		{
 			get
 			{
-				return (!string.IsNullOrWhiteSpace(_scriptsDirSetting)
-						? _scriptsDirSetting
+				var setting = AppState.Settings.Get("VanillaScriptsDirectory");
+				return (!string.IsNullOrWhiteSpace(setting)
+						? setting
 						: Path.Combine(GameDirectory, VanillaScriptBase));
 			}
 		}
 
-		static string _modsDirSetting = AppState.Settings.Get("ModsDirectory");
 		public static string ModsDirectory
 		{
 			get
 			{
-				return (!string.IsNullOrWhiteSpace(_modsDirSetting)
-						? _modsDirSetting
+				var setting = AppState.Settings.Get("ModsDirectory");
+				return (!string.IsNullOrWhiteSpace(setting)
+						? setting
 						: Path.Combine(GameDirectory, "Mods"));
 			}
 		}
 
-		public static bool IsScriptsDirectoryDerived => string.IsNullOrWhiteSpace(_scriptsDirSetting);
+		public static bool IsScriptsDirectoryDerived => string.IsNullOrWhiteSpace(AppState.Settings.Get("VanillaScriptsDirectory"));
 
-		public static bool IsModsDirectoryDerived => string.IsNullOrWhiteSpace(_modsDirSetting);
+		public static bool IsModsDirectoryDerived => string.IsNullOrWhiteSpace(AppState.Settings.Get("ModsDirectory"));
 
 		public static string GetRelativePath(string fullPath, string basePath)
 		{
