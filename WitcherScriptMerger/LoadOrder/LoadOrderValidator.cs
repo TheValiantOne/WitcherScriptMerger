@@ -21,8 +21,11 @@ namespace WitcherScriptMerger.LoadOrder
 			{
 				PrioritizeMergedMod(loadOrder, mergedMod);
 			}
-			else if (choice == DialogResult.Cancel)  // Never
+			else if (choice == DialogResult.Cancel && Program.Notifier.IsInteractive)  // Never
 			{
+				// IsInteractive guard: HeadlessMergeNotifier's fixed default for
+				// YesNoCancel is Cancel, which would otherwise persist this setting
+				// on every headless run that reaches here.
 				Program.Settings.Set("ValidateCustomLoadOrder", false);
 				Program.Settings.Save();
 			}
@@ -30,10 +33,20 @@ namespace WitcherScriptMerger.LoadOrder
 
 		static DialogResult PromptToPrioritizeMergedMod(string modsSettingsPath)
 		{
-			MessageBoxManager.Cancel = "Ne&ver";
-			MessageBoxManager.Register();
-
-			var choice = MessageBox.Show(
+			// Known, accepted regression: the Cancel button used to be relabeled
+			// "Ne&ver" via MessageBoxManager.Register()/Unregister(), which worked
+			// only because the old MessageBox.Show call ran on the same background
+			// thread (Register()'s SetWindowsHookEx is thread-affine) as this
+			// method. Program.Notifier.ShowMessage (MainForm.ShowMessage) Invokes
+			// the actual MessageBox.Show onto the UI thread, so that hook can no
+			// longer see the dialog's window messages - relabeling can't be
+			// preserved without adding custom button-text support to
+			// IMergeNotifier, which is out of scope here. The Cancel button now
+			// reads "Cancel"; clicking it still permanently disables this check
+			// (see the IsInteractive-guarded branch above), just without a label
+			// saying so. DialogResult semantics and this method's return value are
+			// otherwise unchanged.
+			return Program.Notifier.ShowMessage(
 				$"{modsSettingsPath}\n\n" +
 				"Detected custom load order in the file above, and merged files aren't configured to load first.\n\n" +
 				"Would you like Script Merger to modify your custom load order so that your merged files have top priority?",
@@ -41,9 +54,6 @@ namespace WitcherScriptMerger.LoadOrder
 				MessageBoxButtons.YesNoCancel,
 				MessageBoxIcon.Exclamation,
 				MessageBoxDefaultButton.Button2);
-
-			MessageBoxManager.Unregister();
-			return choice;
 		}
 
 		static void PrioritizeMergedMod(CustomLoadOrder loadOrder, ModLoadSetting mergedModSetting)

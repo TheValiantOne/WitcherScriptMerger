@@ -14,10 +14,19 @@ namespace WitcherScriptMerger
 		public DialogResult ShowMessage(string text,
 			string title = "",
 			MessageBoxButtons buttons = MessageBoxButtons.OK,
-			MessageBoxIcon icon = MessageBoxIcon.None)
+			MessageBoxIcon icon = MessageBoxIcon.None,
+			MessageBoxDefaultButton defaultButton = MessageBoxDefaultButton.Button1)
 		{
 			Write(text, title, icon);
 
+			// defaultButton is intentionally unused here: it only affects which
+			// button has interactive UI focus (Enter-key behavior), and headless
+			// mode has no UI to focus. The DialogResult below is chosen per
+			// buttons set instead, per this class's own fixed, non-destructive
+			// default for each verb - not by the caller's requested default
+			// button. A call site relying on defaultButton to signal "this is the
+			// safe answer" for a MessageBoxButtons combination not covered below
+			// will get whatever the catch-all case returns instead.
 			return buttons switch
 			{
 				MessageBoxButtons.OK => DialogResult.OK,
