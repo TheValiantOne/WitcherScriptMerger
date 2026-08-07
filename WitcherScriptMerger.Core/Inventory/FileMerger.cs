@@ -274,7 +274,11 @@ namespace WitcherScriptMerger.Inventory
 
 		FileInfo MergeTextInteractive(Merge merge, MergeSource source1, MergeSource source2)
 		{
-			ProgressInfo.CurrentAction = $"Merging {source1.Name} && {source2.Name} — waiting for KDiff3 to close";
+			// Deliberately engine-neutral wording: this used to name KDiff3 explicitly
+			// ("waiting for KDiff3 to close"), which is wrong when MergeEngine is
+			// DiffPlexMergeEngine instead - no external process or window is involved
+			// there at all. Flagged in code review, see CLAUDE.md.
+			ProgressInfo.CurrentAction = $"Merging {source1.Name} && {source2.Name}";
 
 			var result = MergeEngine.Merge(source1, source2, _vanillaFile, _outputPath);
 

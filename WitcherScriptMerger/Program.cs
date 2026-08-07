@@ -66,11 +66,19 @@ namespace WitcherScriptMerger
 		[STAThread]
 		static void Main(string[] args)
 		{
-			// The one real IMergeEngine implementation, supplied here since it needs
-			// Tools/KDiff3.cs's Win32 P/Invoke (host-only) - see Tools/IMergeEngine.cs.
+			// The default IMergeEngine implementation, supplied here since KDiff3MergeEngine
+			// needs Tools/KDiff3.cs's Win32 P/Invoke (host-only) - see Tools/IMergeEngine.cs.
 			// Must be set before anything calls Paths.ValidateDependencyPaths() or
-			// constructs a FileMerger, in any of the GUI/CLI/MCP paths below.
-			AppState.MergeEngine = new KDiff3MergeEngine();
+			// constructs a FileMerger, in any of the GUI/CLI/MCP paths below. The
+			// "MergeEngine" App.config setting can switch to DiffPlexMergeEngine (Core, no
+			// external binary) instead - not the default yet, since it hasn't been
+			// cross-checked against KDiff3 on enough real conflicting files (see CLAUDE.md
+			// and the PR that introduced it); this switch exists so it can be tried without
+			// recompiling, not as a signal that it's considered production-ready.
+			AppState.MergeEngine =
+				Settings.Get("MergeEngine").EqualsIgnoreCase("diffplex")
+					? (IMergeEngine)new DiffPlexMergeEngine()
+					: new KDiff3MergeEngine();
 
 			if (args.Length > 0)
 			{
