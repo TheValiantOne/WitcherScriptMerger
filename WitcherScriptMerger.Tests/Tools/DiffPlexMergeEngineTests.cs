@@ -26,9 +26,18 @@ namespace WitcherScriptMerger.Tests.Tools
 	// Any fixture that reaches a genuine-conflict outcome now also reaches
 	// FileOpener.Open (see MergeHeadless's comment) - those fixtures swap it for a stub
 	// in a try/finally around the real FileOpener.TryOpen, so no test run ever actually
-	// launches a process. All fixtures in this class run sequentially (xunit's default:
-	// one implicit collection per test class), so swapping this process-wide static field
-	// per-test is safe without extra locking.
+	// launches a process. FileOpener.Open is a single process-wide static field, so
+	// swapping it per-test is only safe because nothing else touches it concurrently -
+	// fixtures within this one class run sequentially (xunit's default: no [Collection]
+	// attribute here, so this class is its own implicit collection, and collections, not
+	// individual test classes, are xunit's actual unit of parallelism), but a *different*
+	// test class that also exercises DiffPlexMergeEngine.MergeHeadless/Merge on a
+	// genuine-conflict fixture would be a different collection by that same default, and
+	// could run concurrently with this one, racing this same static field. If a future
+	// test class needs to do that, it needs either an explicit shared, non-parallel
+	// [Collection] with this one, or its own equivalent stub-and-restore discipline
+	// guaranteed not to overlap with this class's - don't assume the sequencing this
+	// class relies on extends automatically to a second class touching the same static.
 	public class DiffPlexMergeEngineTests
 	{
 		[Fact]
@@ -180,6 +189,32 @@ namespace WitcherScriptMerger.Tests.Tools
 			var baseText = "a();\r\n   \r\nb();\r\n";
 			var oldText = "a();\r\n\r\nb();\r\n";      // mod1: trims trailing spaces, line stays blank
 			var newText = "a();\r\nb();\r\n";           // mod2: deletes the blank line entirely
+
+			var result = DiffPlexMergeEngine.BuildMerge(baseText, oldText, newText, "modA", "modB");
+
+			Assert.True(result.HasConflicts);
+			Assert.Contains("<<<<<<< modA", result.MergedText);
+			Assert.Contains(">>>>>>> modB", result.MergedText);
+		}
+
+		[Fact]
+		public void BuildMerge_TrailingNbspVersusPlainSpace_IsNotMisclassifiedAsWhitespaceOnly()
+		{
+			// Regression test for a real bug caught in code review: NormalizeWhitespace
+			// used to call the parameterless string.Trim(), which (unlike the
+			// WhitespaceRun regex used for internal runs) trims by the full Unicode
+			// whitespace category - including NBSP (U+00A0) - at the leading/trailing
+			// edges of the joined, collapsed comparison text. That silently undid this
+			// class's own stated NBSP-preservation guarantee (see WhitespaceRun's own
+			// comment) whenever the differing NBSP happened to land at a piece boundary,
+			// which a trailing one on the last differing line always does. One mod's line
+			// ends in a real NBSP (plausible in localized dialogue text); the other's the
+			// same line without it - a genuine content difference that must stay a
+			// conflict, not silently collapse to "equal" once the trailing NBSP is
+			// (incorrectly) trimmed away along with the line's own \r\n.
+			var baseText = "x = 1;\r\n";
+			var oldText = "x = 2;\u00A0\r\n";
+			var newText = "x = 2;\r\n";
 
 			var result = DiffPlexMergeEngine.BuildMerge(baseText, oldText, newText, "modA", "modB");
 

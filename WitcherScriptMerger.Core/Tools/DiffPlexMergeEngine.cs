@@ -35,9 +35,14 @@ namespace WitcherScriptMerger.Tools
 	// a text-merge engine without referencing Tools/KDiff3.cs's Win32 P/Invoke, which had
 	// to stay in the host project; now that KDiff3MergeEngine is gone, DiffPlexMergeEngine
 	// (already Core-side, same as FileMerger) is the only implementation there will ever
-	// be, so the interface no longer bridges anything - keeping it would be exactly the
-	// premature "abstraction with one implementation for its whole remaining life" this
-	// repo's own conventions say to avoid (see CLAUDE.md/CONTRIBUTING.md).
+	// be, so the interface no longer bridges anything - keeping it would be premature
+	// abstraction (an interface with exactly one implementation for its whole remaining
+	// life). This isn't a documented repo-wide rule - a prior version of this comment
+	// claimed CONTRIBUTING.md said as much, which code review caught as false (grep
+	// confirms CONTRIBUTING.md never mentions abstraction, interfaces, or "premature" at
+	// all) - it's this deletion's own reasoning, consistent with IMergeEngine.cs's own
+	// former doc comment, which called itself "scaffolding... NOT meant as a permanent
+	// pluggable-engine abstraction" and predicted its own removal once KDiff3 was gone.
 	//
 	// There's no UI here at all, so "interactive" and "headless" collapse to the same
 	// underlying logic: Merge() just runs MergeHeadless() and maps NeedsManualResolution
@@ -91,6 +96,20 @@ namespace WitcherScriptMerger.Tools
 		// collapses the same as before - only the extra-exotic Unicode members of \s
 		// are excluded. Flagged in code review, see CLAUDE.md.
 		static readonly Regex WhitespaceRun = new Regex(@"[ \t\r\n\f\v]+", RegexOptions.Compiled);
+
+		// Same exact character set as WhitespaceRun above, as a char[] rather than a
+		// regex - used by NormalizeWhitespace's own Trim() call. A real bug, caught in
+		// code review: NormalizeWhitespace used to call the parameterless string.Trim(),
+		// which trims by char.IsWhiteSpace - the full Unicode whitespace category,
+		// including NBSP - silently undoing this class's whole stated reason for using a
+		// narrow ASCII-only regex in the first place, but only at the leading/trailing
+		// edges of the joined, collapsed text (WhitespaceRun itself was always correctly
+		// ASCII-only for internal runs). Concretely: oldPieces=["Hello "],
+		// newPieces=["Hello"] collapse to the same "Hello" after Trim() strips the edge
+		// NBSP, silently auto-resolving as whitespace-only a case that should stay a
+		// genuine conflict - exactly the NBSP-vs-space content-loss scenario the comment
+		// above already warned about, just missed for the edges specifically.
+		static readonly char[] WhitespaceChars = { ' ', '\t', '\r', '\n', '\f', '\v' };
 
 		#endregion
 
@@ -240,26 +259,36 @@ namespace WitcherScriptMerger.Tools
 			// they read it later from a different working directory than the one that
 			// wrote it - the absolute form is unambiguous regardless of when/where it's read.
 			var sidecarFullPath = Path.GetFullPath(sidecarPath);
-			var openSuffix = openConflictMarkers
-				? " - attempting to open it now for review."
-				: " - not opened automatically (dry run preview).";
+
+			// Opened BEFORE the notifier message, deliberately reordered from an earlier
+			// version of this method (code review caught the problem with the original
+			// order): the message needs to say whether the file actually opened, and
+			// FileOpener.Open's own bool return is exactly that signal - a stock machine
+			// with no default association for ".conflict" makes Process.Start either
+			// throw ERROR_NO_ASSOCIATION (swallowed by FileOpener.TryOpen's own catch,
+			// returning false) or raise the OS "how do you want to open this?" picker, and
+			// the message would otherwise unconditionally claim "attempting to open it
+			// now" regardless of what actually happened. Best-effort either way: a failed
+			// open doesn't change the result below, the sidecar is on disk regardless.
+			// Skipped entirely for a dry run (openConflictMarkers = false - see this
+			// method's parameter comment), which also means dryRun's message always uses
+			// the "open it manually" wording, never claims an open that was never
+			// attempted. One consequence of this ordering worth stating plainly: on the
+			// GUI's interactive path, AppState.Notifier.ShowMessage is a real blocking
+			// modal, so the editor (if any) now opens BEHIND that modal instead of after
+			// it - arguably better (the file's already up by the time the user dismisses
+			// the dialog) but a deliberate change from this method's original "acknowledge
+			// the skip, then the editor opens" sequencing, not an accident.
+			var opened = openConflictMarkers && FileOpener.Open(sidecarPath);
+			var openSuffix = !openConflictMarkers
+				? " - open it manually to review (dry run preview)."
+				: opened
+					? " - opened it for review."
+					: " - open it manually to review.";
 			AppState.Notifier.ShowMessage(
 				$"Skipped {source1.Name} + {source2.Name}: genuine conflict, needs manual resolution. " +
 				$"Conflict markers were written to {sidecarFullPath}{openSuffix}",
 				"Skipped", NotifyButtons.OK, DialogIcon.Warning);
-
-			// Runs after the notifier message (which blocks on the GUI's interactive
-			// path, via a real modal MessageBox - not here, headless) so the two read as
-			// one coherent sequence: acknowledge the skip, then the editor opens. Fires
-			// identically whether this method was reached via the CLI/MCP headless path
-			// directly or via the GUI's interactive Merge(), which just delegates to this
-			// method (see this class's header comment) - one mechanism for both, not two.
-			// Best-effort: FileOpener.Open never throws, and a failed open (no file
-			// association, etc.) doesn't change the result below - the sidecar is on disk
-			// either way. Skipped entirely for a dry run (openConflictMarkers = false) -
-			// see this method's parameter comment.
-			if (openConflictMarkers)
-				FileOpener.Open(sidecarPath);
 
 			return MergeEngineResult.NeedsManualResolution;
 		}
@@ -392,8 +421,13 @@ namespace WitcherScriptMerger.Tools
 			// rates of both failure modes, this is caught here (an exception) and
 			// verified for (the silent case, via the post-loop count check below) rather
 			// than trusted - MergeHeadless treats either as "needs manual resolution"
-			// rather than ever risking corrupted merge output. This is also a primary
-			// reason DiffPlexMergeEngine isn't the default engine yet (see Program.cs).
+			// rather than ever risking corrupted merge output. This measured, non-zero
+			// failure rate is the primary reason retiring KDiff3 in favor of this engine
+			// was a deliberate tradeoff, not a strict improvement - see
+			// docs/decisions/kdiff3-retirement.md. (There used to be a separate
+			// engine-selection switch in Program.cs that kept this engine non-default
+			// specifically because of this gap - that switch and KDiff3 itself are both
+			// gone now; this engine is the sole engine, gap and all.)
 			try
 			{
 				foreach (var block in diffResult.DiffBlocks)
@@ -559,7 +593,9 @@ namespace WitcherScriptMerger.Tools
 
 		static string NormalizeWhitespace(IEnumerable<string> pieces)
 		{
-			return WhitespaceRun.Replace(string.Concat(pieces), " ").Trim();
+			// Trim(WhitespaceChars), not the parameterless Trim() - see WhitespaceChars'
+			// own comment for the real NBSP-related bug this guards against.
+			return WhitespaceRun.Replace(string.Concat(pieces), " ").Trim(WhitespaceChars);
 		}
 
 		#endregion

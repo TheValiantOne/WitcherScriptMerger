@@ -214,7 +214,7 @@ namespace WitcherScriptMerger.Inventory
 				{
 					source1 = MergeSource.FromFlatFile(mergedFile, null);
 				}
-				else if (!ConfirmContinueAfterCanceledMerge(file.OrderedSources.Length - i - 1, merge))
+				else if (!ConfirmContinueAfterSkippedMerge(file.OrderedSources.Length - i - 1, merge))
 					break;
 			}
 
@@ -244,7 +244,7 @@ namespace WitcherScriptMerger.Inventory
 
 				if (!GetUnpackedFiles(file.RelativePath, ref source1, ref source2))
 				{
-					if (ConfirmContinueAfterCanceledMerge(file.OrderedSources.Length - i - 1, merge))
+					if (ConfirmContinueAfterSkippedMerge(file.OrderedSources.Length - i - 1, merge))
 						continue;
 					break;
 				}
@@ -254,7 +254,7 @@ namespace WitcherScriptMerger.Inventory
 				{
 					source1 = MergeSource.FromFlatFile(mergedFile, null);
 				}
-				else if (!ConfirmContinueAfterCanceledMerge(file.OrderedSources.Length - i - 1, merge))
+				else if (!ConfirmContinueAfterSkippedMerge(file.OrderedSources.Length - i - 1, merge))
 					break;
 			}
 
@@ -318,10 +318,38 @@ namespace WitcherScriptMerger.Inventory
 		}
 
 		// Returns false when the caller should stop trying further merges for this
-		// file (user declined to continue past a canceled/failed merge).
-		bool ConfirmContinueAfterCanceledMerge(int remainingMergesForFile, Merge merge)
+		// file (user declined to continue past a skipped/failed merge).
+		//
+		// Named/worded around "skipped", not "canceled", after code review caught a real
+		// mislabeling: this fires whenever MergeTextInteractive returns null, which used
+		// to mean "the user canceled out of KDiff3's GUI" (a true cancellation, since
+		// KDiff3's interactive path really did hand control to the user) but now, with
+		// DiffPlexMergeEngine, means "the engine automatically refused this pairing"
+		// (genuine conflict, missing vanilla file, outdated-hash guard, or a caught
+		// DiffAlgorithmException) - DiffPlexMergeEngine.Merge() has no UI at all, so there
+		// is no longer any user action for "canceled" to describe here. The engine
+		// already showed its own explanatory modal (via AppState.Notifier) before
+		// returning, so this second prompt only needs to ask whether to continue with any
+		// remaining merges for the file - describing what already happened as "skipped"
+		// keeps that prompt accurate instead of misattributing an automatic refusal to
+		// the user.
+		//
+		// When remainingMergesForFile is 0, this shows a bare OK-only acknowledgment with
+		// no real decision attached (there's nothing left to continue to) - back-to-back
+		// with DiffPlexMergeEngine's own explanatory modal for a MergeTextInteractive
+		// failure, that's a genuinely redundant second dialog. Deliberately not
+		// special-cased away, though: this method has a second call site
+		// (MergeBundleFileInteractive, on a GetUnpackedFiles failure) where nothing else
+		// shows any explanatory message first - GetUnpackedFiles itself is silent on
+		// failure - so this modal is the ONLY acknowledgment the user gets in that case.
+		// Suppressing it whenever remainingMergesForFile is 0 would fix the redundant
+		// case but silently drop the only feedback in the other one; distinguishing them
+		// would need this method to know which failure path it's covering, which isn't
+		// worth the extra plumbing just to save one OK click in the already-explained
+		// case.
+		bool ConfirmContinueAfterSkippedMerge(int remainingMergesForFile, Merge merge)
 		{
-			var msg = $"Merge {ProgressInfo.CurrentMergeNum} of {ProgressInfo.TotalMergeCount} was canceled.";
+			var msg = $"Merge {ProgressInfo.CurrentMergeNum} of {ProgressInfo.TotalMergeCount} was skipped.";
 			var buttons = NotifyButtons.OK;
 			if (remainingMergesForFile > 0)
 			{
