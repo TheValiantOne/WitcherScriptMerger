@@ -695,13 +695,28 @@ namespace WitcherScriptMerger.Inventory
 			{
 				ProgressInfo.CurrentAction = "Searching for corresponding vanilla bundle";
 
+				// Directory.GetDirectories throws DirectoryNotFoundException on a missing
+				// root - guarded here (rather than assuming GameDirectory always has real
+				// "content"/"DLC" subfolders) so a scratch/incomplete game tree degrades to
+				// "no vanilla bundle found" (handled below, and ultimately by each
+				// IMergeEngine as a graceful "needs manual resolution" skip - see
+				// DiffPlexMergeEngine.MergeHeadless's hasVanillaVersion guard) instead of an
+				// unhandled exception. Previously unreachable on the WinForms host, which
+				// always gates bundle-category scanning behind Paths.ValidateDependencyPaths()
+				// (and therefore a real game install) first - but WitcherScriptMerger.Headless
+				// deliberately doesn't require QuickBMS/wcc_lite to attempt flat-file merges, so
+				// a bundle conflict can now reach this code without one. Flagged in code review,
+				// see CLAUDE.md.
 				var bundleDirs =
-					Directory.GetDirectories(Paths.BundlesDirectory)
-						.Select(path => Path.Combine(path, "bundles"))
+					(Directory.Exists(Paths.BundlesDirectory)
+						? Directory.GetDirectories(Paths.BundlesDirectory).Select(path => Path.Combine(path, "bundles"))
+						: Enumerable.Empty<string>())
 						.Concat(
-							Directory.GetDirectories(Paths.DlcDirectory)
-								.Where(path => new Regex("DLC[0-9]*$").IsMatch(path) || new Regex("ep[0-9]$").IsMatch(path))
-								.Select(path => Path.Combine(path, Paths.BundleBase, "bundles"))
+							Directory.Exists(Paths.DlcDirectory)
+								? Directory.GetDirectories(Paths.DlcDirectory)
+									.Where(path => new Regex("DLC[0-9]*$").IsMatch(path) || new Regex("ep[0-9]$").IsMatch(path))
+									.Select(path => Path.Combine(path, Paths.BundleBase, "bundles"))
+								: Enumerable.Empty<string>()
 						)
 						.Where(path => Directory.Exists(path))
 						.OrderBy(path => path, new LoadOrderComparer())

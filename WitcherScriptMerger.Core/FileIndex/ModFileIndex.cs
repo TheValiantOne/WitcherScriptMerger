@@ -44,6 +44,28 @@ namespace WitcherScriptMerger.FileIndex
 				AppState.Notifier.ShowMessage("Can't find any mods in the Mods directory.");
 			}
 
+			// Checked once up front, not per bundle: QuickBms.GetBundleContentPaths already
+			// reports (and now tolerates - see its own comment) a missing QuickBMS/wcc_lite
+			// per bundle it's asked about, but that's needlessly noisy across a whole scan,
+			// and WitcherScriptMerger.Headless (the Linux-capable CLI/MCP-only host, no
+			// QuickBMS/wcc_lite bundled at all - see its CLAUDE.md section) deliberately
+			// doesn't gate scanning on Paths.ValidateDependencyPaths() first, so this is the
+			// first point in a scan where that host's missing bundle tooling surfaces. One
+			// clear message beats one per bundle. BundleCount (below) still counts every
+			// *.bundle file found regardless of whether checking could proceed - unchanged
+			// from before this gate, and consistent with ScriptCount/XmlCount, which also
+			// count regardless of checkScripts/checkXml - only the actual per-file
+			// conflict-scanning loop is skipped here.
+			var canCheckBundles = checkBundles && QuickBms.IsAvailable;
+			if (checkBundles && !canCheckBundles)
+			{
+				AppState.Notifier.ShowMessage(
+					"Bundle-content conflicts aren't supported without QuickBMS and wcc_lite configured - skipping bundle-content checking for this scan.",
+					"Bundle Checking Unavailable",
+					NotifyButtons.OK,
+					DialogIcon.Warning);
+			}
+
 			var bgWorker = new BackgroundWorker
 			{
 				WorkerReportsProgress = true
@@ -72,7 +94,7 @@ namespace WitcherScriptMerger.FileIndex
 					{
 						Files.AddRange(GetModFilesFromPaths(xmlPaths, Categories.Xml, modName));
 					}
-					if (checkBundles)
+					if (canCheckBundles)
 					{
 						foreach (var bundlePath in bundlePaths)
 						{
@@ -83,7 +105,7 @@ namespace WitcherScriptMerger.FileIndex
 					var progressPct = (int)((float)++i / modDirPaths.Count * 100f);
 					bgWorker.ReportProgress(progressPct, modName as object);
 				}
-				if (checkBundles)
+				if (canCheckBundles)
 					System.Threading.Thread.Sleep(500);  // Wait for progress bar to fill completely
 			};
 			bgWorker.RunWorkerCompleted += completedHandler;
