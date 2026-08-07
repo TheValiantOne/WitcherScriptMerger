@@ -1,0 +1,42 @@
+name: Build
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build & format check
+    runs-on: windows-latest
+
+    steps:
+      # .editorconfig requires CRLF line endings, and .cs files are committed
+      # as LF (no .gitattributes normalizes this). Force checkout to produce
+      # CRLF so `dotnet format whitespace` sees the same line endings as a
+      # local Windows dev machine, regardless of the runner image's git default.
+      - name: Configure git to check out CRLF line endings
+        run: git config --global core.autocrlf true
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          cache: true
+          # No packages.lock.json in this repo (setup-dotnet's cache default),
+          # so key the NuGet cache off the csproj's pinned package versions instead.
+          cache-dependency-path: WitcherScriptMerger/WitcherScriptMerger.csproj
+
+      - name: Restore
+        run: dotnet restore WitcherScriptMerger.sln
+
+      - name: Build
+        run: dotnet build WitcherScriptMerger.sln --no-restore --configuration Release
+
+      - name: Verify formatting
+        run: dotnet format whitespace WitcherScriptMerger.sln --verify-no-changes
