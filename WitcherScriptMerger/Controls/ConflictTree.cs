@@ -9,295 +9,295 @@ using WitcherScriptMerger.LoadOrder;
 
 namespace WitcherScriptMerger.Controls
 {
-    class ConflictTree : SMTree
-    {
-        #region Members
+	class ConflictTree : SMTree
+	{
+		#region Members
 
-        public static readonly Color UnresolvedForeColor = Color.Red;
-        public static readonly Color ResolvedForeColor = Color.Purple;
+		public static readonly Color UnresolvedForeColor = Color.Red;
+		public static readonly Color ResolvedForeColor = Color.Purple;
 
-        public static readonly new Color FileNodeForeColor = UnresolvedForeColor;
+		public static readonly new Color FileNodeForeColor = UnresolvedForeColor;
 
-        ToolStripSeparator _contextCustomLoadOrderSeparator = new ToolStripSeparator();
-        ToolStripMenuItem _contextPrioritizeMod = new ToolStripMenuItem();
-        ToolStripMenuItem _contextToggleMod = new ToolStripMenuItem();
-        ToolStripMenuItem _contextRemoveFromCustomLoadOrder = new ToolStripMenuItem();
+		ToolStripSeparator _contextCustomLoadOrderSeparator = new ToolStripSeparator();
+		ToolStripMenuItem _contextPrioritizeMod = new ToolStripMenuItem();
+		ToolStripMenuItem _contextToggleMod = new ToolStripMenuItem();
+		ToolStripMenuItem _contextRemoveFromCustomLoadOrder = new ToolStripMenuItem();
 
-        #endregion
+		#endregion
 
-        public ConflictTree()
-        {
-            ContextNodeRegion.Items.AddRange(new ToolStripItem[]
-            {
-                _contextCustomLoadOrderSeparator,
-                _contextPrioritizeMod,
-                _contextToggleMod,
-                _contextRemoveFromCustomLoadOrder
-            });
-            BuildContextMenu();
+		public ConflictTree()
+		{
+			ContextNodeRegion.Items.AddRange(new ToolStripItem[]
+			{
+				_contextCustomLoadOrderSeparator,
+				_contextPrioritizeMod,
+				_contextToggleMod,
+				_contextRemoveFromCustomLoadOrder
+			});
+			BuildContextMenu();
 
-            // contextCustomLoadOrderSeparator
-            _contextCustomLoadOrderSeparator.Name = "contextCustomLoadOrderSeparator";
-            _contextCustomLoadOrderSeparator.Size = new Size(235, 6);
-            
-            // contextPrioritizeMod
-            _contextPrioritizeMod.Name = "contextPrioritizeMod";
-            _contextPrioritizeMod.Size = new Size(225, 22);
-            _contextPrioritizeMod.Text = "Set Overall Mod Priority...";
-            _contextPrioritizeMod.ToolTipText = "Lets you define the load order of your mods";
-            _contextPrioritizeMod.Click += ContextPrioritizeMod;
+			// contextCustomLoadOrderSeparator
+			_contextCustomLoadOrderSeparator.Name = "contextCustomLoadOrderSeparator";
+			_contextCustomLoadOrderSeparator.Size = new Size(235, 6);
 
-            // contextToggleMod
-            _contextToggleMod.Name = "contextToggleMod";
-            _contextToggleMod.Size = new Size(225, 22);
-            _contextToggleMod.ToolTipText = "Tells the game whether to load any of this mod's files";
-            _contextToggleMod.Click += ContextToggleMod;
+			// contextPrioritizeMod
+			_contextPrioritizeMod.Name = "contextPrioritizeMod";
+			_contextPrioritizeMod.Size = new Size(225, 22);
+			_contextPrioritizeMod.Text = "Set Overall Mod Priority...";
+			_contextPrioritizeMod.ToolTipText = "Lets you define the load order of your mods";
+			_contextPrioritizeMod.Click += ContextPrioritizeMod;
 
-            // contextRemoveFromCustomLoadOrder
-            _contextRemoveFromCustomLoadOrder.Name = "contextRemoveFromCustomLoadOrder";
-            _contextRemoveFromCustomLoadOrder.Size = new Size(225, 22);
-            _contextRemoveFromCustomLoadOrder.ToolTipText = "Removes this mod's custom load order settings";
-            _contextRemoveFromCustomLoadOrder.Click += ContextRemoveFromCustomLoadOrder;
-        }
+			// contextToggleMod
+			_contextToggleMod.Name = "contextToggleMod";
+			_contextToggleMod.Size = new Size(225, 22);
+			_contextToggleMod.ToolTipText = "Tells the game whether to load any of this mod's files";
+			_contextToggleMod.Click += ContextToggleMod;
 
-        protected override void HandleCheckedChange()
-        {
-            if (IsCategoryNode(ClickedNode))
-            {
-                foreach (var fileNode in ClickedNode.GetTreeNodes())
-                {
-                    fileNode.SetCheckedIfVisible(ClickedNode.Checked);
-                    foreach (var modNode in fileNode.GetTreeNodes())
-                        modNode.SetCheckedIfVisible(ClickedNode.Checked);
-                }
-            }
-            else if (IsFileNode(ClickedNode))
-            {
-                foreach (var modNode in ClickedNode.GetTreeNodes())
-                    modNode.SetCheckedIfVisible(ClickedNode.Checked);
+			// contextRemoveFromCustomLoadOrder
+			_contextRemoveFromCustomLoadOrder.Name = "contextRemoveFromCustomLoadOrder";
+			_contextRemoveFromCustomLoadOrder.Size = new Size(225, 22);
+			_contextRemoveFromCustomLoadOrder.ToolTipText = "Removes this mod's custom load order settings";
+			_contextRemoveFromCustomLoadOrder.Click += ContextRemoveFromCustomLoadOrder;
+		}
 
-                var catNode = ClickedNode.Parent;
-                catNode.Checked = catNode.AreAllVisibleCheckboxesChecked();
-            }
-            else if (IsModNode(ClickedNode))
-            {
-                var fileNode = ClickedNode.Parent;
-                fileNode.Checked = fileNode.AreAllVisibleCheckboxesChecked();
+		protected override void HandleCheckedChange()
+		{
+			if (IsCategoryNode(ClickedNode))
+			{
+				foreach (var fileNode in ClickedNode.GetTreeNodes())
+				{
+					fileNode.SetCheckedIfVisible(ClickedNode.Checked);
+					foreach (var modNode in fileNode.GetTreeNodes())
+						modNode.SetCheckedIfVisible(ClickedNode.Checked);
+				}
+			}
+			else if (IsFileNode(ClickedNode))
+			{
+				foreach (var modNode in ClickedNode.GetTreeNodes())
+					modNode.SetCheckedIfVisible(ClickedNode.Checked);
 
-                var catNode = fileNode.Parent;
-                catNode.Checked = catNode.AreAllVisibleCheckboxesChecked();
-            }
-            Program.MainForm.EnableMergeIfValidSelection();
-        }
+				var catNode = ClickedNode.Parent;
+				catNode.Checked = catNode.AreAllVisibleCheckboxesChecked();
+			}
+			else if (IsModNode(ClickedNode))
+			{
+				var fileNode = ClickedNode.Parent;
+				fileNode.Checked = fileNode.AreAllVisibleCheckboxesChecked();
 
-        protected override void OnLeftMouseUp(MouseEventArgs e)
-        {
-            if (ClickedNode == null)
-                return;
+				var catNode = fileNode.Parent;
+				catNode.Checked = catNode.AreAllVisibleCheckboxesChecked();
+			}
+			Program.MainForm.EnableMergeIfValidSelection();
+		}
 
-            TreeNode catNode;
-            if (IsCategoryNode(ClickedNode))
-                catNode = ClickedNode;
-            else if (IsFileNode(ClickedNode))
-                catNode = ClickedNode.Parent;
-            else
-                catNode = ClickedNode.Parent.Parent;
+		protected override void OnLeftMouseUp(MouseEventArgs e)
+		{
+			if (ClickedNode == null)
+				return;
 
-            var category = catNode.Tag as ModFileCategory;
-            if (!category.IsSupported)
-            {
-                EndUpdate();
-                IsUpdating = false;
-            }
-            else
-                base.OnLeftMouseUp(e);
-        }
+			TreeNode catNode;
+			if (IsCategoryNode(ClickedNode))
+				catNode = ClickedNode;
+			else if (IsFileNode(ClickedNode))
+				catNode = ClickedNode.Parent;
+			else
+				catNode = ClickedNode.Parent.Parent;
 
-        protected override void SetAllChecked(bool isChecked)
-        {
-            foreach (var catNode in CategoryNodes)
-            {
-                var category = catNode.Tag as ModFileCategory;
-                if (!category.IsSupported)
-                    continue;
-                catNode.Checked = isChecked;
-                foreach (var fileNode in catNode.GetTreeNodes())
-                {
-                    fileNode.Checked = isChecked;
-                    foreach (var modNode in fileNode.GetTreeNodes())
-                        modNode.SetCheckedIfVisible(isChecked);
-                }
-            }
-            Program.MainForm.EnableMergeIfValidSelection();
-        }
+			var category = catNode.Tag as ModFileCategory;
+			if (!category.IsSupported)
+			{
+				EndUpdate();
+				IsUpdating = false;
+			}
+			else
+				base.OnLeftMouseUp(e);
+		}
 
-        protected override void SetContextItemAvailability()
-        {
-            base.SetContextItemAvailability();
+		protected override void SetAllChecked(bool isChecked)
+		{
+			foreach (var catNode in CategoryNodes)
+			{
+				var category = catNode.Tag as ModFileCategory;
+				if (!category.IsSupported)
+					continue;
+				catNode.Checked = isChecked;
+				foreach (var fileNode in catNode.GetTreeNodes())
+				{
+					fileNode.Checked = isChecked;
+					foreach (var modNode in fileNode.GetTreeNodes())
+						modNode.SetCheckedIfVisible(isChecked);
+				}
+			}
+			Program.MainForm.EnableMergeIfValidSelection();
+		}
 
-            if (ClickedNode != null)
-            {
-                if (IsModNode(ClickedNode))
-                {
-                    _contextCustomLoadOrderSeparator.Available = true;
-                    _contextPrioritizeMod.Available = true;
+		protected override void SetContextItemAvailability()
+		{
+			base.SetContextItemAvailability();
 
-                    foreach (var item in ContextNodeRegion.Items.Cast<ToolStripItem>())
-                    {
-                        item.Enabled = Program.LoadOrder.IsValid;
-                    }
+			if (ClickedNode != null)
+			{
+				if (IsModNode(ClickedNode))
+				{
+					_contextCustomLoadOrderSeparator.Available = true;
+					_contextPrioritizeMod.Available = true;
 
-                    var isDisabled = Program.LoadOrder.IsModDisabledByName(ClickedNode.Text);
+					foreach (var item in ContextNodeRegion.Items.Cast<ToolStripItem>())
+					{
+						item.Enabled = Program.LoadOrder.IsValid;
+					}
 
-                    _contextToggleMod.Available = true;
-                    _contextToggleMod.Text =
-                        isDisabled
-                        ? "Enable Mod"
-                        : "Disable Mod";
+					var isDisabled = Program.LoadOrder.IsModDisabledByName(ClickedNode.Text);
 
-                    _contextRemoveFromCustomLoadOrder.Available = Program.LoadOrder.ContainsMod(ClickedNode.Text);
-                    _contextRemoveFromCustomLoadOrder.Text =
-                        isDisabled
-                        ? "Clear Priority && Disabled State"
-                        : "Clear Priority";
-                }
-            }
-            else if (!this.IsEmpty())
-            {
-                ContextSelectAll.Available = CategoryNodes.Any(catNode => !catNode.Checked && (catNode.Tag as ModFileCategory).IsSupported);
+					_contextToggleMod.Available = true;
+					_contextToggleMod.Text =
+						isDisabled
+						? "Enable Mod"
+						: "Disable Mod";
 
-                ContextDeselectAll.Available = ModNodes.Any(modNode => modNode.Checked);
-            }
-        }
+					_contextRemoveFromCustomLoadOrder.Available = Program.LoadOrder.ContainsMod(ClickedNode.Text);
+					_contextRemoveFromCustomLoadOrder.Text =
+						isDisabled
+						? "Clear Priority && Disabled State"
+						: "Clear Priority";
+				}
+			}
+			else if (!this.IsEmpty())
+			{
+				ContextSelectAll.Available = CategoryNodes.Any(catNode => !catNode.Checked && (catNode.Tag as ModFileCategory).IsSupported);
 
-        void ContextPrioritizeMod(object sender, EventArgs e)
-        {
-            RightClickedNode.BackColor = Color.Gainsboro;
+				ContextDeselectAll.Available = ModNodes.Any(modNode => modNode.Checked);
+			}
+		}
 
-            var modName = RightClickedNode.Text;
-            int? inputVal;
+		void ContextPrioritizeMod(object sender, EventArgs e)
+		{
+			RightClickedNode.BackColor = Color.Gainsboro;
 
-            using (var prompt = new PriorityPrompt())
-            {
-                inputVal = prompt.ShowDialog(Program.LoadOrder.GetPriorityByName(modName));
-            }
+			var modName = RightClickedNode.Text;
+			int? inputVal;
 
-            RightClickedNode.BackColor = Color.Transparent;
+			using (var prompt = new PriorityPrompt())
+			{
+				inputVal = prompt.ShowDialog(Program.LoadOrder.GetPriorityByName(modName));
+			}
 
-            if (!inputVal.HasValue)
-                return;
+			RightClickedNode.BackColor = Color.Transparent;
 
-            Program.LoadOrder.Refresh();
-            Program.LoadOrder.SetPriorityByName(modName, inputVal.Value);
-            Program.LoadOrder.AddMergedModIfMissing();
-            Program.LoadOrder.Save();
+			if (!inputVal.HasValue)
+				return;
 
-            SetStylesForCustomLoadOrder();
-        }
+			Program.LoadOrder.Refresh();
+			Program.LoadOrder.SetPriorityByName(modName, inputVal.Value);
+			Program.LoadOrder.AddMergedModIfMissing();
+			Program.LoadOrder.Save();
 
-        void ContextToggleMod(object sender, EventArgs e)
-        {
-            var modName = RightClickedNode.Text;
+			SetStylesForCustomLoadOrder();
+		}
 
-            Program.LoadOrder.Refresh();
-            Program.LoadOrder.ToggleModByName(modName);
-            Program.LoadOrder.AddMergedModIfMissing();
-            Program.LoadOrder.Save();
+		void ContextToggleMod(object sender, EventArgs e)
+		{
+			var modName = RightClickedNode.Text;
 
-            SetStylesForCustomLoadOrder();
+			Program.LoadOrder.Refresh();
+			Program.LoadOrder.ToggleModByName(modName);
+			Program.LoadOrder.AddMergedModIfMissing();
+			Program.LoadOrder.Save();
 
-            var fileNode = RightClickedNode.Parent;
+			SetStylesForCustomLoadOrder();
 
-            if ((fileNode.Parent.Tag as ModFileCategory).IsSupported)
-            {
-                fileNode.Checked = fileNode.GetTreeNodes()
-                    .Where(modNode => modNode.IsCheckBoxVisible())
-                    .All(modNode => modNode.Checked);
-            }
+			var fileNode = RightClickedNode.Parent;
 
-            Program.MainForm.EnableMergeIfValidSelection();
-        }
+			if ((fileNode.Parent.Tag as ModFileCategory).IsSupported)
+			{
+				fileNode.Checked = fileNode.GetTreeNodes()
+					.Where(modNode => modNode.IsCheckBoxVisible())
+					.All(modNode => modNode.Checked);
+			}
 
-        void ContextRemoveFromCustomLoadOrder(object sender, EventArgs e)
-        {
-            Program.LoadOrder.Refresh();
+			Program.MainForm.EnableMergeIfValidSelection();
+		}
 
-            var modName = RightClickedNode.Text;
+		void ContextRemoveFromCustomLoadOrder(object sender, EventArgs e)
+		{
+			Program.LoadOrder.Refresh();
 
-            var index = Program.LoadOrder.Mods.FindIndex(setting => setting.ModName.EqualsIgnoreCase(modName));
+			var modName = RightClickedNode.Text;
 
-            if (index > -1)
-            {
-                Program.LoadOrder.Mods.RemoveAt(index);
-                Program.LoadOrder.Save();
-            }
+			var index = Program.LoadOrder.Mods.FindIndex(setting => setting.ModName.EqualsIgnoreCase(modName));
 
-            SetStylesForCustomLoadOrder();
-        }
+			if (index > -1)
+			{
+				Program.LoadOrder.Mods.RemoveAt(index);
+				Program.LoadOrder.Save();
+			}
 
-        internal void SetStylesForCustomLoadOrder()
-        {
-            foreach (var fileNode in FileNodes)
-            {
-                var modNames = fileNode.GetTreeNodes().Select(modNode => modNode.Text);
+			SetStylesForCustomLoadOrder();
+		}
 
-                var isResolved = Program.LoadOrder.HasResolvedConflict(modNames);
+		internal void SetStylesForCustomLoadOrder()
+		{
+			foreach (var fileNode in FileNodes)
+			{
+				var modNames = fileNode.GetTreeNodes().Select(modNode => modNode.Text);
 
-                var topPriorityMod =
-                    isResolved
-                    ? Program.LoadOrder.GetTopPriorityEnabledMod(modNames)
-                    : null;
+				var isResolved = Program.LoadOrder.HasResolvedConflict(modNames);
 
-                fileNode.ForeColor =
-                    isResolved
-                    ? ResolvedForeColor
-                    : UnresolvedForeColor;
+				var topPriorityMod =
+					isResolved
+					? Program.LoadOrder.GetTopPriorityEnabledMod(modNames)
+					: null;
 
-                foreach (var modNode in fileNode.GetTreeNodes())
-                {
-                    modNode.NodeFont = DefaultFont;
-                    modNode.ForeColor = DefaultForeColor;
-                    modNode.ToolTipText = "";
+				fileNode.ForeColor =
+					isResolved
+					? ResolvedForeColor
+					: UnresolvedForeColor;
 
-                    var priority = Program.LoadOrder.GetPriorityByName(modNode.Text);
+				foreach (var modNode in fileNode.GetTreeNodes())
+				{
+					modNode.NodeFont = DefaultFont;
+					modNode.ForeColor = DefaultForeColor;
+					modNode.ToolTipText = "";
 
-                    modNode.ToolTipText =
-                        priority > -1
-                        ? $"Priority {priority}"
-                        : "No Priority";
+					var priority = Program.LoadOrder.GetPriorityByName(modNode.Text);
 
-                    if (modNode.Text.EqualsIgnoreCase(topPriorityMod))
-                    {
-                        if (priority > -1)
-                            modNode.ToolTipText += " - Top priority in this conflict";
-                    }
-                    else if (isResolved)
-                    {
-                        modNode.ToolTipText += " - Overridden by a higher-priority mod";
-                        modNode.ForeColor = Color.Gray;
-                    }
+					modNode.ToolTipText =
+						priority > -1
+						? $"Priority {priority}"
+						: "No Priority";
 
-                    if (Program.LoadOrder.IsModDisabledByName(modNode.Text))
-                    {
-                        modNode.ToolTipText = "This mod is disabled in your custom load order";
-                        modNode.ForeColor = Color.Gray;
-                        modNode.SetFontStyle(FontStyle.Strikeout);
-                        modNode.Checked = false;
-                        modNode.SetIsCheckBoxVisible(false);
-                    }
-                    else if ((fileNode.Parent.Tag as ModFileCategory).IsSupported)
-                        modNode.SetIsCheckBoxVisible(true);
+					if (modNode.Text.EqualsIgnoreCase(topPriorityMod))
+					{
+						if (priority > -1)
+							modNode.ToolTipText += " - Top priority in this conflict";
+					}
+					else if (isResolved)
+					{
+						modNode.ToolTipText += " - Overridden by a higher-priority mod";
+						modNode.ForeColor = Color.Gray;
+					}
 
-                    var mergeFile = Program.Inventory
-                        ?.GetMergeByRelativePath(fileNode.Text)
-                        ?.GetHashByModName(modNode.Text);
-                    if (mergeFile != null && mergeFile.IsOutdated)
-                    {
-                        modNode.ToolTipText += " - CHANGED SINCE MERGE";
-                        modNode.SetFontStyle(FontStyle.Italic);
-                    }
-                }
-            }
-        }
-    }
+					if (Program.LoadOrder.IsModDisabledByName(modNode.Text))
+					{
+						modNode.ToolTipText = "This mod is disabled in your custom load order";
+						modNode.ForeColor = Color.Gray;
+						modNode.SetFontStyle(FontStyle.Strikeout);
+						modNode.Checked = false;
+						modNode.SetIsCheckBoxVisible(false);
+					}
+					else if ((fileNode.Parent.Tag as ModFileCategory).IsSupported)
+						modNode.SetIsCheckBoxVisible(true);
+
+					var mergeFile = Program.Inventory
+						?.GetMergeByRelativePath(fileNode.Text)
+						?.GetHashByModName(modNode.Text);
+					if (mergeFile != null && mergeFile.IsOutdated)
+					{
+						modNode.ToolTipText += " - CHANGED SINCE MERGE";
+						modNode.SetFontStyle(FontStyle.Italic);
+					}
+				}
+			}
+		}
+	}
 }

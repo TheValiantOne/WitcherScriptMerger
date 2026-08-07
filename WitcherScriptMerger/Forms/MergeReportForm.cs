@@ -3,90 +3,90 @@ using System.Windows.Forms;
 
 namespace WitcherScriptMerger.Forms
 {
-    partial class MergeReportForm : Form
-    {
-        #region Initialization
+	partial class MergeReportForm : Form
+	{
+		#region Initialization
 
-        public MergeReportForm(
-            int mergeNum, int mergeTotal,
-            string file1, string file2, string outputFile,
-            string modName1, string modName2)
-        {
-            InitializeComponent();
+		public MergeReportForm(
+			int mergeNum, int mergeTotal,
+			string file1, string file2, string outputFile,
+			string modName1, string modName2)
+		{
+			InitializeComponent();
 
-            if (mergeTotal > 1)
-            {
-                Text += $" ({mergeNum} of {mergeTotal})";  // Window title
-                if (mergeNum < mergeTotal)
-                    btnOK.Text = "Continue";
-            }
+			if (mergeTotal > 1)
+			{
+				Text += $" ({mergeNum} of {mergeTotal})";  // Window title
+				if (mergeNum < mergeTotal)
+					btnOK.Text = "Continue";
+			}
 
-            lblTempContentFiles.Visible = outputFile.StartsWithIgnoreCase(Paths.MergedBundleContent);
+			lblTempContentFiles.Visible = outputFile.StartsWithIgnoreCase(Paths.MergedBundleContent);
 
-            grpFile1.Text = modName1;
-            grpFile2.Text = modName2;
-            
-            txtFilePath1.Text = file1;
-            txtFilePath2.Text = file2;
-            txtMergedPath.Text = outputFile;
+			grpFile1.Text = modName1;
+			grpFile2.Text = modName2;
 
-            chkShowAfterMerge.Checked = Program.Settings.Get<bool>("ReportAfterMerge");
+			txtFilePath1.Text = file1;
+			txtFilePath2.Text = file2;
+			txtMergedPath.Text = outputFile;
 
-            btnOK.Select();
+			chkShowAfterMerge.Checked = Program.Settings.Get<bool>("ReportAfterMerge");
 
-            lblPlusAndArrow.Left = (ClientSize.Width / 2) - (lblPlusAndArrow.Width / 2);
-        }
+			btnOK.Select();
 
-        void MergeReportForm_FormClosing(object sender, FormClosingEventArgs e)
-        {
-            Program.Settings.Set("ReportAfterMerge", chkShowAfterMerge.Checked);
-        }
+			lblPlusAndArrow.Left = (ClientSize.Width / 2) - (lblPlusAndArrow.Width / 2);
+		}
 
-        #endregion
+		void MergeReportForm_FormClosing(object sender, FormClosingEventArgs e)
+		{
+			Program.Settings.Set("ReportAfterMerge", chkShowAfterMerge.Checked);
+		}
 
-        #region Button Clicks
+		#endregion
 
-        void btnOpenFile1_Click(object sender, EventArgs e)
-        {
-            Program.TryOpenFile(txtFilePath1.Text);
-        }
+		#region Button Clicks
 
-        void btnOpenFile2_Click(object sender, EventArgs e)
-        {
-            Program.TryOpenFile(txtFilePath2.Text);
-        }
+		void btnOpenFile1_Click(object sender, EventArgs e)
+		{
+			Program.TryOpenFile(txtFilePath1.Text);
+		}
 
-        void btnOpenOutputFile_Click(object sender, EventArgs e)
-        {
-            Program.TryOpenFile(txtMergedPath.Text);
-        }
+		void btnOpenFile2_Click(object sender, EventArgs e)
+		{
+			Program.TryOpenFile(txtFilePath2.Text);
+		}
 
-        void btnOpenDir1_Click(object sender, EventArgs e)
-        {
-            Program.TryOpenFileLocation(txtFilePath1.Text);
-        }
+		void btnOpenOutputFile_Click(object sender, EventArgs e)
+		{
+			Program.TryOpenFile(txtMergedPath.Text);
+		}
 
-        void btnOpenDir2_Click(object sender, EventArgs e)
-        {
-            Program.TryOpenFileLocation(txtFilePath2.Text);
-        }
+		void btnOpenDir1_Click(object sender, EventArgs e)
+		{
+			Program.TryOpenFileLocation(txtFilePath1.Text);
+		}
 
-        void btnOpenOutputDir_Click(object sender, EventArgs e)
-        {
-            Program.TryOpenFileLocation(txtMergedPath.Text);
-        }
+		void btnOpenDir2_Click(object sender, EventArgs e)
+		{
+			Program.TryOpenFileLocation(txtFilePath2.Text);
+		}
 
-        void btnOK_Click(object sender, EventArgs e)
-        {
-            DialogResult = DialogResult.OK;
-        }
+		void btnOpenOutputDir_Click(object sender, EventArgs e)
+		{
+			Program.TryOpenFileLocation(txtMergedPath.Text);
+		}
 
-        #endregion
+		void btnOK_Click(object sender, EventArgs e)
+		{
+			DialogResult = DialogResult.OK;
+		}
 
-        void txt_KeyDown(object sender, KeyEventArgs e)
-        {
-            if (e.Control && e.KeyCode == Keys.A)
-                (sender as TextBox).SelectAll();
-        }
-    }
+		#endregion
+
+		void txt_KeyDown(object sender, KeyEventArgs e)
+		{
+			if (e.Control && e.KeyCode == Keys.A)
+				(sender as TextBox).SelectAll();
+		}
+	}
 }

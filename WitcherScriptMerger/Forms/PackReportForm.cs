@@ -4,54 +4,54 @@ using System.Windows.Forms;
 
 namespace WitcherScriptMerger.Forms
 {
-    partial class PackReportForm : Form
-    {
-        #region Initialization
+	partial class PackReportForm : Form
+	{
+		#region Initialization
 
-        public PackReportForm(string bundlePath)
-        {
-            InitializeComponent();
-            
-            txtBundlePath.Text = bundlePath;
+		public PackReportForm(string bundlePath)
+		{
+			InitializeComponent();
 
-            var contentPaths = Directory.GetFiles(Paths.MergedBundleContent, "*", SearchOption.AllDirectories);
-            txtContent.Text = string.Join(Environment.NewLine, contentPaths);
+			txtBundlePath.Text = bundlePath;
 
-            chkShowAfterPack.Checked = Program.Settings.Get<bool>("ReportAfterPack");
+			var contentPaths = Directory.GetFiles(Paths.MergedBundleContent, "*", SearchOption.AllDirectories);
+			txtContent.Text = string.Join(Environment.NewLine, contentPaths);
 
-            btnOK.Select();
-        }
+			chkShowAfterPack.Checked = Program.Settings.Get<bool>("ReportAfterPack");
 
-        void PackReportForm_FormClosing(object sender, FormClosingEventArgs e)
-        {
-            Program.Settings.Set("ReportAfterPack", chkShowAfterPack.Checked);
-        }
+			btnOK.Select();
+		}
 
-        #endregion
+		void PackReportForm_FormClosing(object sender, FormClosingEventArgs e)
+		{
+			Program.Settings.Set("ReportAfterPack", chkShowAfterPack.Checked);
+		}
 
-        #region Button Clicks
+		#endregion
 
-        void btnOpenBundleDir_Click(object sender, EventArgs e)
-        {
-            Program.TryOpenFileLocation(txtBundlePath.Text);
-        }
+		#region Button Clicks
 
-        void btnOpenContentDir_Click(object sender, EventArgs e)
-        {
-            Program.TryOpenDirectory(Paths.MergedBundleContent);
-        }
+		void btnOpenBundleDir_Click(object sender, EventArgs e)
+		{
+			Program.TryOpenFileLocation(txtBundlePath.Text);
+		}
 
-        void btnOK_Click(object sender, EventArgs e)
-        {
-            DialogResult = DialogResult.OK;
-        }
+		void btnOpenContentDir_Click(object sender, EventArgs e)
+		{
+			Program.TryOpenDirectory(Paths.MergedBundleContent);
+		}
 
-        #endregion
+		void btnOK_Click(object sender, EventArgs e)
+		{
+			DialogResult = DialogResult.OK;
+		}
 
-        void txt_KeyDown(object sender, KeyEventArgs e)
-        {
-            if (e.Control && e.KeyCode == Keys.A)
-                (sender as TextBox).SelectAll();
-        }
-    }
+		#endregion
+
+		void txt_KeyDown(object sender, KeyEventArgs e)
+		{
+			if (e.Control && e.KeyCode == Keys.A)
+				(sender as TextBox).SelectAll();
+		}
+	}
 }
