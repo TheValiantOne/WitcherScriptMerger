@@ -4,9 +4,12 @@ using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text.Json;
-using System.Threading;
 using System.Windows.Forms;
-using WitcherScriptMerger.FileIndex;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using ModelContextProtocol.Server;
+using WitcherScriptMerger.Cli;
 using WitcherScriptMerger.Forms;
 using WitcherScriptMerger.Inventory;
 using WitcherScriptMerger.LoadOrder;
@@ -113,8 +116,8 @@ namespace WitcherScriptMerger
 
         #region CLI
 
-        // "merge" is the only command for now. Exit codes: 0 = every conflict
-        // merged, 1 = couldn't even start (bad args/config/deps), 2 = ran, but
+        // "merge" and "mcp" are the only commands for now. Exit codes (merge): 0 = every
+        // conflict merged, 1 = couldn't even start (bad args/config/deps), 2 = ran, but
         // one or more conflicts were skipped.
         static int RunCli(string[] args)
         {
@@ -126,9 +129,12 @@ namespace WitcherScriptMerger
                 return 1;
             }
 
+            if (args[0] == "mcp")
+                return RunMcp();
+
             if (args[0] != "merge")
             {
-                Console.Error.WriteLine($"Unknown command '{args[0]}'. Supported commands: merge");
+                Console.Error.WriteLine($"Unknown command '{args[0]}'. Supported commands: merge, mcp");
                 return 1;
             }
 
@@ -166,17 +172,7 @@ namespace WitcherScriptMerger
             LoadOrder = new CustomLoadOrder();
             Inventory = MergeInventory.Load(Paths.Inventory);
 
-            var modIndex = new ModFileIndex();
-            using (var scanComplete = new ManualResetEventSlim(false))
-            {
-                modIndex.BuildAsync(
-                    Settings.Get<bool>("CheckScripts"),
-                    Settings.Get<bool>("CheckXmlFiles"),
-                    Settings.Get<bool>("CheckBundleContents"),
-                    (s, e) => { },
-                    (s, e) => scanComplete.Set());
-                scanComplete.Wait();
-            }
+            var modIndex = MergeOperations.ScanConflicts();
 
             if (!modIndex.HasConflict)
             {
@@ -184,8 +180,7 @@ namespace WitcherScriptMerger
                 return 0;
             }
 
-            var merger = new FileMerger(Inventory, (s, e) => { }, (s, e) => { });
-            var summary = merger.MergeConflictsHeadless(modIndex.Conflicts, mergedModName, orderOverrides);
+            var summary = MergeOperations.RunMerge(Inventory, modIndex.Conflicts, mergedModName, orderOverrides);
 
             Inventory.Save();
 
@@ -212,11 +207,39 @@ namespace WitcherScriptMerger
             }
         }
 
+        // Runs an MCP server over stdio (see Mcp/WsmMcpTools.cs and CLAUDE.md's MCP mode
+        // section). Never returns until the client disconnects/stdin closes.
+        static int RunMcp()
+        {
+            if (!Paths.ValidateDependencyPaths())
+            {
+                Console.Error.WriteLine(
+                    "A required dependency (KDiff3, QuickBMS, or wcc_lite) is missing. Configure its path in App.config.");
+                return 1;
+            }
+
+            var builder = Host.CreateApplicationBuilder();
+
+            // stdout is reserved for MCP protocol frames - all logging must go to stderr.
+            builder.Logging.AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);
+
+            builder.Services
+                .AddMcpServer()
+                .WithStdioServerTransport()
+                .WithToolsFromAssembly();
+
+            builder.Build().RunAsync().GetAwaiter().GetResult();
+            return 0;
+        }
+
         static bool MaybeAttachConsole()
         {
-            // GetCommandLineArgs()[0] is the exe path itself; more than that
-            // means CLI arguments were passed.
-            return Environment.GetCommandLineArgs().Length > 1 && AttachConsole(AttachParentProcess);
+            // GetCommandLineArgs()[0] is the exe path itself; more than that means CLI
+            // arguments were passed. Skip for "mcp": stdin/stdout are reserved for the MCP
+            // protocol there, and an MCP client spawns WSM with its own redirected pipes
+            // rather than a console to attach to anyway.
+            var cliArgs = Environment.GetCommandLineArgs();
+            return cliArgs.Length > 1 && cliArgs[1] != "mcp" && AttachConsole(AttachParentProcess);
         }
 
         const int AttachParentProcess = -1;

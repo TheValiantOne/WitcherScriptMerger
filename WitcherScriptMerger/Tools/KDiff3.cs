@@ -105,52 +105,102 @@ namespace WitcherScriptMerger.Tools
             }
             args += " --auto";
 
+            // KDiff3's window can't be hidden or moved off-screen without KDiff3 hanging
+            // indefinitely instead of auto-solving - confirmed empirically against a hidden
+            // desktop, ShowWindow(SW_HIDE), and SetWindowPos off-screen, all three of which
+            // reliably broke it while an untouched window auto-solves normally. It also
+            // steals foreground focus while shown. Since it can't be suppressed, the best
+            // available mitigation is restoring focus to whatever had it beforehand once
+            // KDiff3's window is gone (auto-solved, failed, or killed) - see CLAUDE.md.
+            var previousForeground = NativeMethods.GetForegroundWindow();
+
             var proc = Process.Start(ResolveExePath(), args);
             var pid = proc.Id;
             var sw = Stopwatch.StartNew();
 
-            const int gracePeriodMs = 3000;
-            const int backstopTimeoutMs = 60000;
-            long? mergeWindowFirstSeenMs = null;
-
-            while (!proc.HasExited && sw.ElapsedMilliseconds < backstopTimeoutMs)
+            try
             {
-                if (HasVisibleMergeWindow(pid))
+                const int gracePeriodMs = 3000;
+                const int backstopTimeoutMs = 60000;
+                long? mergeWindowFirstSeenMs = null;
+
+                while (!proc.HasExited && sw.ElapsedMilliseconds < backstopTimeoutMs)
                 {
-                    mergeWindowFirstSeenMs ??= sw.ElapsedMilliseconds;
-                    if (sw.ElapsedMilliseconds - mergeWindowFirstSeenMs.Value > gracePeriodMs)
-                        break;
+                    if (HasVisibleMergeWindow(pid))
+                    {
+                        mergeWindowFirstSeenMs ??= sw.ElapsedMilliseconds;
+                        if (sw.ElapsedMilliseconds - mergeWindowFirstSeenMs.Value > gracePeriodMs)
+                            break;
+                    }
+                    else
+                    {
+                        mergeWindowFirstSeenMs = null;
+                    }
+                    proc.Refresh();
+                    Thread.Sleep(250);
                 }
-                else
+
+                if (!proc.HasExited)
                 {
-                    mergeWindowFirstSeenMs = null;
+                    // Kill() only requests termination - wait for it to actually take effect
+                    // before returning, so the finally block's focus restore isn't racing a
+                    // window that's still technically alive (and might still own focus).
+                    try { proc.Kill(entireProcessTree: true); proc.WaitForExit(2000); } catch { }
+                    DeleteIfExists(scratchOutputPath);
+                    Program.Notifier.ShowMessage(
+                        $"Skipped {source1.Name} + {source2.Name}: needs manual conflict resolution.",
+                        "Skipped", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return HeadlessResult.NeedsManualResolution;
                 }
-                proc.Refresh();
-                Thread.Sleep(250);
-            }
 
-            if (!proc.HasExited)
-            {
-                try { proc.Kill(entireProcessTree: true); } catch { }
+                if (proc.ExitCode == 0 && File.Exists(scratchOutputPath))
+                {
+                    var outputDir = Path.GetDirectoryName(outputPath);
+                    if (!Directory.Exists(outputDir))
+                        Directory.CreateDirectory(outputDir);
+                    File.Copy(scratchOutputPath, outputPath, overwrite: true);
+                    DeleteIfExists(scratchOutputPath);
+                    return HeadlessResult.AutoSolved;
+                }
+
                 DeleteIfExists(scratchOutputPath);
-                Program.Notifier.ShowMessage(
-                    $"Skipped {source1.Name} + {source2.Name}: needs manual conflict resolution.",
-                    "Skipped", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return HeadlessResult.NeedsManualResolution;
+                return HeadlessResult.Failed;
             }
-
-            if (proc.ExitCode == 0 && File.Exists(scratchOutputPath))
+            finally
             {
-                var outputDir = Path.GetDirectoryName(outputPath);
-                if (!Directory.Exists(outputDir))
-                    Directory.CreateDirectory(outputDir);
-                File.Copy(scratchOutputPath, outputPath, overwrite: true);
-                DeleteIfExists(scratchOutputPath);
-                return HeadlessResult.AutoSolved;
+                RestoreForegroundWindow(previousForeground);
             }
+        }
 
-            DeleteIfExists(scratchOutputPath);
-            return HeadlessResult.Failed;
+        // Plain SetForegroundWindow is denied by Windows' foreground-lock rules here: this
+        // process didn't own the foreground when KDiff3's window took over (KDiff3 did), so
+        // by the time this runs, this process isn't a privileged caller. Confirmed empirically -
+        // plain SetForegroundWindow was silently denied every time, even after waiting for
+        // KDiff3's process to fully exit. AttachThreadInput temporarily shares input state with
+        // whatever thread currently owns the foreground, which grants this thread the same
+        // privilege for the duration of the call - the standard workaround for this restriction.
+        // Still best-effort: if it fails, there's nothing destructive about not refocusing.
+        static void RestoreForegroundWindow(IntPtr previousForeground)
+        {
+            try
+            {
+                var currentForeground = NativeMethods.GetForegroundWindow();
+                var foregroundThreadId = NativeMethods.GetWindowThreadProcessId(currentForeground, out _);
+                var currentThreadId = NativeMethods.GetCurrentThreadId();
+
+                var attached = foregroundThreadId != currentThreadId
+                    && NativeMethods.AttachThreadInput(currentThreadId, foregroundThreadId, true);
+                try
+                {
+                    NativeMethods.SetForegroundWindow(previousForeground);
+                }
+                finally
+                {
+                    if (attached)
+                        NativeMethods.AttachThreadInput(currentThreadId, foregroundThreadId, false);
+                }
+            }
+            catch { }
         }
 
         static string BuildArgs(
@@ -235,6 +285,18 @@ namespace WitcherScriptMerger.Tools
 
             [DllImport("user32.dll", CharSet = CharSet.Auto)]
             public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+
+            [DllImport("user32.dll")]
+            public static extern IntPtr GetForegroundWindow();
+
+            [DllImport("user32.dll")]
+            public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+            [DllImport("kernel32.dll")]
+            public static extern uint GetCurrentThreadId();
+
+            [DllImport("user32.dll")]
+            public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
         }
 
         // Vanilla .ws files are UTF-16LE with a BOM, but mod authors' files are often
