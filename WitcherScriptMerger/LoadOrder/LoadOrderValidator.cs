@@ -21,8 +21,11 @@ namespace WitcherScriptMerger.LoadOrder
 			{
 				PrioritizeMergedMod(loadOrder, mergedMod);
 			}
-			else if (choice == DialogResult.Cancel)  // Never
+			else if (choice == DialogResult.Cancel && Program.Notifier.IsInteractive)  // Never
 			{
+				// IsInteractive guard: HeadlessMergeNotifier's fixed default for
+				// YesNoCancel is Cancel, which would otherwise persist this setting
+				// on every headless run that reaches here.
 				Program.Settings.Set("ValidateCustomLoadOrder", false);
 				Program.Settings.Save();
 			}
@@ -30,20 +33,18 @@ namespace WitcherScriptMerger.LoadOrder
 
 		static DialogResult PromptToPrioritizeMergedMod(string modsSettingsPath)
 		{
-			MessageBoxManager.Cancel = "Ne&ver";
-			MessageBoxManager.Register();
-
-			var choice = MessageBox.Show(
+			// Cancel button reads "Cancel", not "Never" - the old MessageBoxManager
+			// relabel hook was thread-affine and can't survive ShowMessage's Invoke.
+			// DialogResult semantics (and PromptToPrioritizeMergedMod's return value)
+			// are unchanged.
+			return Program.Notifier.ShowMessage(
 				$"{modsSettingsPath}\n\n" +
 				"Detected custom load order in the file above, and merged files aren't configured to load first.\n\n" +
 				"Would you like Script Merger to modify your custom load order so that your merged files have top priority?",
 				"Custom Load Order Problem",
-				MessageBoxButtons.YesNoCancel,
-				MessageBoxIcon.Exclamation,
-				MessageBoxDefaultButton.Button2);
-
-			MessageBoxManager.Unregister();
-			return choice;
+				System.Windows.Forms.MessageBoxButtons.YesNoCancel,
+				System.Windows.Forms.MessageBoxIcon.Exclamation,
+				System.Windows.Forms.MessageBoxDefaultButton.Button2);
 		}
 
 		static void PrioritizeMergedMod(CustomLoadOrder loadOrder, ModLoadSetting mergedModSetting)

@@ -14,7 +14,8 @@ namespace WitcherScriptMerger
 		public DialogResult ShowMessage(string text,
 			string title = "",
 			MessageBoxButtons buttons = MessageBoxButtons.OK,
-			MessageBoxIcon icon = MessageBoxIcon.None)
+			MessageBoxIcon icon = MessageBoxIcon.None,
+			MessageBoxDefaultButton defaultButton = MessageBoxDefaultButton.Button1)
 		{
 			Write(text, title, icon);
 

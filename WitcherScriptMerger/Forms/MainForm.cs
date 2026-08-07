@@ -882,18 +882,19 @@ namespace WitcherScriptMerger.Forms
 		public DialogResult ShowMessage(string text,
 			string title = "",
 			MessageBoxButtons buttons = MessageBoxButtons.OK,
-			MessageBoxIcon icon = MessageBoxIcon.None)
+			MessageBoxIcon icon = MessageBoxIcon.None,
+			MessageBoxDefaultButton defaultButton = MessageBoxDefaultButton.Button1)
 		{
 			this.ActivateSafely();
 
 			if (this.InvokeRequired)
 			{
 				return (DialogResult)this.Invoke(new Func<DialogResult>(
-					() => { return MessageBox.Show(this, text, title, buttons, icon); }));
+					() => { return MessageBox.Show(this, text, title, buttons, icon, defaultButton); }));
 			}
 			else
 			{
-				return MessageBox.Show(this, text, title, buttons, icon);
+				return MessageBox.Show(this, text, title, buttons, icon, defaultButton);
 			}
 		}
 
