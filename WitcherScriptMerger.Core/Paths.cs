@@ -82,28 +82,25 @@ namespace WitcherScriptMerger
 			return fullPath.Substring(startIndex);
 		}
 
-		// KDiff3's own exe-path check goes through AppState.MergeEngine rather than a
-		// direct reference to Tools/KDiff3.cs, which stays in the host project for
-		// its Win32 P/Invoke and so can't be referenced from Core - see
-		// Tools/IMergeEngine.cs. Like AppState.Notifier/Settings, this relies on the
-		// host having set AppState.MergeEngine before calling in - true for the one
-		// real entry point (Program.Main, first line) but not enforced by the type
-		// system; a null MergeEngine here reads as "dependency missing" rather than
-		// "not initialized yet", which could be a confusing message if that
-		// invariant is ever broken by a future entry point.
-		// Split out from ValidateDependencyPaths (below) so a host that only supports
-		// flat-file (.ws/.xml) conflicts - WitcherScriptMerger.Headless, the Linux-capable
-		// CLI/MCP-only host, which has no QuickBMS/wcc_lite bundled at all (see its
-		// CLAUDE.md section and docs/decisions/bundle-format-replacement-spike.md) - can
-		// gate merging on just the text-merge engine, without also requiring bundle
-		// tooling it deliberately doesn't ship. Bundle-category conflicts still fail
-		// gracefully per-conflict when attempted without QuickBMS/wcc_lite (see
-		// QuickBms.IsAvailable's callers and FileMerger.GetUnpackedFiles) - this split
-		// doesn't change that, it only changes what gates a *scan/merge run starting at
-		// all*.
+		// DiffPlexMergeEngine (the sole text-merge engine - KDiff3 and the IMergeEngine
+		// interface that used to sit in front of it were retired, see
+		// docs/decisions/kdiff3-retirement.md) is in-process and needs no external binary
+		// at all (DiffPlexMergeEngine.ValidateExePath() always returns true), so this
+		// always succeeds - kept as a named method, rather than removed, because callers
+		// (WsmMcpTools, DependencyForm) already call it by this name and it documents
+		// intent at each call site. Split out from ValidateDependencyPaths (below) so a
+		// host that only supports flat-file (.ws/.xml) conflicts -
+		// WitcherScriptMerger.Headless, the Linux-capable CLI/MCP-only host, which has no
+		// QuickBMS/wcc_lite bundled at all (see its CLAUDE.md section and
+		// docs/decisions/bundle-format-replacement-spike.md) - can gate merging on just
+		// the text-merge engine, without also requiring bundle tooling it deliberately
+		// doesn't ship. Bundle-category conflicts still fail gracefully per-conflict when
+		// attempted without QuickBMS/wcc_lite (see QuickBms.IsAvailable's callers and
+		// FileMerger.GetUnpackedFiles) - this split doesn't change that, it only changes
+		// what gates a *scan/merge run starting at all*.
 		public static bool ValidateTextMergeDependencies()
 		{
-			return AppState.MergeEngine != null && AppState.MergeEngine.ValidateExePath();
+			return true;
 		}
 
 		// See ValidateTextMergeDependencies above for why this is separate.

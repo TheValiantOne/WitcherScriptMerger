@@ -14,7 +14,6 @@ using WitcherScriptMerger.Forms;
 using WitcherScriptMerger.Inventory;
 using WitcherScriptMerger.LoadOrder;
 using WitcherScriptMerger.Mcp;
-using WitcherScriptMerger.Tools;
 
 namespace WitcherScriptMerger
 {
@@ -66,20 +65,6 @@ namespace WitcherScriptMerger
 		[STAThread]
 		static void Main(string[] args)
 		{
-			// The default IMergeEngine implementation, supplied here since KDiff3MergeEngine
-			// needs Tools/KDiff3.cs's Win32 P/Invoke (host-only) - see Tools/IMergeEngine.cs.
-			// Must be set before anything calls Paths.ValidateDependencyPaths() or
-			// constructs a FileMerger, in any of the GUI/CLI/MCP paths below. The
-			// "MergeEngine" App.config setting can switch to DiffPlexMergeEngine (Core, no
-			// external binary) instead - not the default yet, since it hasn't been
-			// cross-checked against KDiff3 on enough real conflicting files (see CLAUDE.md
-			// and the PR that introduced it); this switch exists so it can be tried without
-			// recompiling, not as a signal that it's considered production-ready.
-			AppState.MergeEngine =
-				Settings.Get("MergeEngine").EqualsIgnoreCase("diffplex")
-					? (IMergeEngine)new DiffPlexMergeEngine()
-					: new KDiff3MergeEngine();
-
 			if (args.Length > 0)
 			{
 				Environment.ExitCode = RunCli(args);
@@ -183,7 +168,7 @@ namespace WitcherScriptMerger
 			if (!Paths.ValidateDependencyPaths())
 			{
 				Notifier.ShowError(
-					"A required dependency (KDiff3, QuickBMS, or wcc_lite) is missing. Configure its path " +
+					"A required dependency (QuickBMS or wcc_lite) is missing. Configure its path " +
 					"in App.config, or run without arguments once to use the GUI's dependency setup.");
 				return 1;
 			}
@@ -256,7 +241,7 @@ namespace WitcherScriptMerger
 			if (!Paths.ValidateDependencyPaths())
 			{
 				Console.Error.WriteLine(
-					"A required dependency (KDiff3, QuickBMS, or wcc_lite) is missing. Configure its path in App.config.");
+					"A required dependency (QuickBMS or wcc_lite) is missing. Configure its path in App.config.");
 				return 1;
 			}
 

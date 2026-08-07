@@ -1,7 +1,6 @@
 ﻿using System.Threading;
 using WitcherScriptMerger.Inventory;
 using WitcherScriptMerger.LoadOrder;
-using WitcherScriptMerger.Tools;
 
 namespace WitcherScriptMerger
 {
@@ -70,10 +69,6 @@ namespace WitcherScriptMerger
 
 		public static CustomLoadOrder LoadOrder = null;
 		public static MergeInventory Inventory = null;
-
-		// Set once by the host project at startup (see Program.cs) to a
-		// KDiff3MergeEngine - see Tools/IMergeEngine.cs for why this exists.
-		public static IMergeEngine MergeEngine = null;
 
 		static AppState() { }
 	}

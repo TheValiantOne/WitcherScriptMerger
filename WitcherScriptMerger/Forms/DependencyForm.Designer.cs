@@ -29,12 +29,6 @@
         private void InitializeComponent()
         {
             System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(DependencyForm));
-            this.grpKDiff3 = new System.Windows.Forms.GroupBox();
-            this.lblKDiff3Msg = new System.Windows.Forms.Label();
-            this.lblKDiff3Path = new System.Windows.Forms.Label();
-            this.btnKDiff3Path = new System.Windows.Forms.Button();
-            this.txtKDiff3Path = new System.Windows.Forms.TextBox();
-            this.lnkKDiff3 = new System.Windows.Forms.LinkLabel();
             this.lblPrompt = new System.Windows.Forms.Label();
             this.grpBms = new System.Windows.Forms.GroupBox();
             this.lblBmsMsg = new System.Windows.Forms.Label();
@@ -56,86 +50,11 @@
             this.btnOK = new System.Windows.Forms.Button();
             this.btnCancel = new System.Windows.Forms.Button();
             this.lnkBms = new System.Windows.Forms.LinkLabel();
-            this.grpKDiff3.SuspendLayout();
             this.grpBms.SuspendLayout();
             this.grpBmsPlugin.SuspendLayout();
             this.grpWccLite.SuspendLayout();
             this.SuspendLayout();
-            // 
-            // grpKDiff3
-            // 
-            this.grpKDiff3.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) 
-            | System.Windows.Forms.AnchorStyles.Right)));
-            this.grpKDiff3.Controls.Add(this.lblKDiff3Msg);
-            this.grpKDiff3.Controls.Add(this.lblKDiff3Path);
-            this.grpKDiff3.Controls.Add(this.btnKDiff3Path);
-            this.grpKDiff3.Controls.Add(this.txtKDiff3Path);
-            this.grpKDiff3.Font = new System.Drawing.Font("Microsoft Sans Serif", 8.25F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.grpKDiff3.Location = new System.Drawing.Point(9, 60);
-            this.grpKDiff3.Name = "grpKDiff3";
-            this.grpKDiff3.Size = new System.Drawing.Size(445, 80);
-            this.grpKDiff3.TabIndex = 1;
-            this.grpKDiff3.TabStop = false;
-            this.grpKDiff3.Text = "KDiff3.exe";
-            // 
-            // lblKDiff3Msg
-            // 
-            this.lblKDiff3Msg.AutoSize = true;
-            this.lblKDiff3Msg.Font = new System.Drawing.Font("Microsoft Sans Serif", 8.25F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.lblKDiff3Msg.Location = new System.Drawing.Point(7, 52);
-            this.lblKDiff3Msg.Name = "lblKDiff3Msg";
-            this.lblKDiff3Msg.Size = new System.Drawing.Size(399, 13);
-            this.lblKDiff3Msg.TabIndex = 4;
-            this.lblKDiff3Msg.Text = "Script Merger uses this open-source tool by Joachim Eibl to create merged text fi" +
-    "les.";
-            // 
-            // lblKDiff3Path
-            // 
-            this.lblKDiff3Path.AutoSize = true;
-            this.lblKDiff3Path.Font = new System.Drawing.Font("Microsoft Sans Serif", 8.25F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.lblKDiff3Path.Location = new System.Drawing.Point(7, 27);
-            this.lblKDiff3Path.Name = "lblKDiff3Path";
-            this.lblKDiff3Path.Size = new System.Drawing.Size(32, 13);
-            this.lblKDiff3Path.TabIndex = 3;
-            this.lblKDiff3Path.Text = "Path:";
-            // 
-            // btnKDiff3Path
-            // 
-            this.btnKDiff3Path.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right)));
-            this.btnKDiff3Path.Font = new System.Drawing.Font("Microsoft Sans Serif", 8.25F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.btnKDiff3Path.Location = new System.Drawing.Point(413, 22);
-            this.btnKDiff3Path.Name = "btnKDiff3Path";
-            this.btnKDiff3Path.Size = new System.Drawing.Size(26, 23);
-            this.btnKDiff3Path.TabIndex = 1;
-            this.btnKDiff3Path.Text = "...";
-            this.btnKDiff3Path.UseVisualStyleBackColor = true;
-            this.btnKDiff3Path.Click += new System.EventHandler(this.btnKDiff3Path_Click);
-            // 
-            // txtKDiff3Path
-            // 
-            this.txtKDiff3Path.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) 
-            | System.Windows.Forms.AnchorStyles.Right)));
-            this.txtKDiff3Path.Font = new System.Drawing.Font("Microsoft Sans Serif", 8.25F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.txtKDiff3Path.Location = new System.Drawing.Point(45, 24);
-            this.txtKDiff3Path.Name = "txtKDiff3Path";
-            this.txtKDiff3Path.Size = new System.Drawing.Size(362, 20);
-            this.txtKDiff3Path.TabIndex = 0;
-            this.txtKDiff3Path.TextChanged += new System.EventHandler(this.exe_TextChanged);
-            // 
-            // lnkKDiff3
-            // 
-            this.lnkKDiff3.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right)));
-            this.lnkKDiff3.AutoSize = true;
-            this.lnkKDiff3.LinkArea = new System.Windows.Forms.LinkArea(14, 53);
-            this.lnkKDiff3.Location = new System.Drawing.Point(311, 60);
-            this.lnkKDiff3.Name = "lnkKDiff3";
-            this.lnkKDiff3.Size = new System.Drawing.Size(137, 17);
-            this.lnkKDiff3.TabIndex = 0;
-            this.lnkKDiff3.TabStop = true;
-            this.lnkKDiff3.Text = "Download from KDiff3 Site";
-            this.lnkKDiff3.UseCompatibleTextRendering = true;
-            this.lnkKDiff3.LinkClicked += new System.Windows.Forms.LinkLabelLinkClickedEventHandler(this.lnkKDiff3_LinkClicked);
-            // 
+            //
             // lblPrompt
             // 
             this.lblPrompt.AutoSize = true;
@@ -156,7 +75,7 @@
             this.grpBms.Controls.Add(this.btnBmsPath);
             this.grpBms.Controls.Add(this.txtBmsPath);
             this.grpBms.Font = new System.Drawing.Font("Microsoft Sans Serif", 8.25F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.grpBms.Location = new System.Drawing.Point(9, 156);
+            this.grpBms.Location = new System.Drawing.Point(9, 60);
             this.grpBms.Name = "grpBms";
             this.grpBms.Size = new System.Drawing.Size(445, 80);
             this.grpBms.TabIndex = 4;
@@ -212,7 +131,7 @@
             this.lnkBmsPlugin.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right)));
             this.lnkBmsPlugin.AutoSize = true;
             this.lnkBmsPlugin.LinkArea = new System.Windows.Forms.LinkArea(14, 53);
-            this.lnkBmsPlugin.Location = new System.Drawing.Point(292, 252);
+            this.lnkBmsPlugin.Location = new System.Drawing.Point(292, 156);
             this.lnkBmsPlugin.Name = "lnkBmsPlugin";
             this.lnkBmsPlugin.Size = new System.Drawing.Size(159, 17);
             this.lnkBmsPlugin.TabIndex = 5;
@@ -230,7 +149,7 @@
             this.grpBmsPlugin.Controls.Add(this.btnBmsPluginPath);
             this.grpBmsPlugin.Controls.Add(this.txtBmsPluginPath);
             this.grpBmsPlugin.Font = new System.Drawing.Font("Microsoft Sans Serif", 8.25F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.grpBmsPlugin.Location = new System.Drawing.Point(12, 252);
+            this.grpBmsPlugin.Location = new System.Drawing.Point(12, 156);
             this.grpBmsPlugin.Name = "grpBmsPlugin";
             this.grpBmsPlugin.Size = new System.Drawing.Size(445, 80);
             this.grpBmsPlugin.TabIndex = 6;
@@ -285,7 +204,7 @@
             this.lnkWccLite.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right)));
             this.lnkWccLite.AutoSize = true;
             this.lnkWccLite.LinkArea = new System.Windows.Forms.LinkArea(14, 53);
-            this.lnkWccLite.Location = new System.Drawing.Point(305, 348);
+            this.lnkWccLite.Location = new System.Drawing.Point(305, 252);
             this.lnkWccLite.Name = "lnkWccLite";
             this.lnkWccLite.Size = new System.Drawing.Size(146, 17);
             this.lnkWccLite.TabIndex = 7;
@@ -303,7 +222,7 @@
             this.grpWccLite.Controls.Add(this.btnWccLitePath);
             this.grpWccLite.Controls.Add(this.txtWccLitePath);
             this.grpWccLite.Font = new System.Drawing.Font("Microsoft Sans Serif", 8.25F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.grpWccLite.Location = new System.Drawing.Point(12, 348);
+            this.grpWccLite.Location = new System.Drawing.Point(12, 252);
             this.grpWccLite.Name = "grpWccLite";
             this.grpWccLite.Size = new System.Drawing.Size(445, 80);
             this.grpWccLite.TabIndex = 8;
@@ -358,7 +277,7 @@
             // 
             this.btnOK.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right)));
             this.btnOK.DialogResult = System.Windows.Forms.DialogResult.Cancel;
-            this.btnOK.Location = new System.Drawing.Point(251, 442);
+            this.btnOK.Location = new System.Drawing.Point(251, 346);
             this.btnOK.Name = "btnOK";
             this.btnOK.Size = new System.Drawing.Size(100, 23);
             this.btnOK.TabIndex = 9;
@@ -370,7 +289,7 @@
             // 
             this.btnCancel.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right)));
             this.btnCancel.DialogResult = System.Windows.Forms.DialogResult.Cancel;
-            this.btnCancel.Location = new System.Drawing.Point(357, 442);
+            this.btnCancel.Location = new System.Drawing.Point(357, 346);
             this.btnCancel.Name = "btnCancel";
             this.btnCancel.Size = new System.Drawing.Size(100, 23);
             this.btnCancel.TabIndex = 10;
@@ -383,7 +302,7 @@
             this.lnkBms.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right)));
             this.lnkBms.AutoSize = true;
             this.lnkBms.LinkArea = new System.Windows.Forms.LinkArea(14, 53);
-            this.lnkBms.Location = new System.Drawing.Point(289, 156);
+            this.lnkBms.Location = new System.Drawing.Point(289, 60);
             this.lnkBms.Name = "lnkBms";
             this.lnkBms.Size = new System.Drawing.Size(159, 17);
             this.lnkBms.TabIndex = 2;
@@ -398,7 +317,7 @@
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.CancelButton = this.btnOK;
-            this.ClientSize = new System.Drawing.Size(469, 477);
+            this.ClientSize = new System.Drawing.Size(469, 381);
             this.ControlBox = false;
             this.Controls.Add(this.lnkBms);
             this.Controls.Add(this.btnCancel);
@@ -409,17 +328,13 @@
             this.Controls.Add(this.grpBmsPlugin);
             this.Controls.Add(this.lblPrompt);
             this.Controls.Add(this.grpBms);
-            this.Controls.Add(this.lnkKDiff3);
-            this.Controls.Add(this.grpKDiff3);
             this.Icon = ((System.Drawing.Icon)(resources.GetObject("$this.Icon")));
-            this.MaximumSize = new System.Drawing.Size(1920, 515);
-            this.MinimumSize = new System.Drawing.Size(485, 515);
+            this.MaximumSize = new System.Drawing.Size(1920, 419);
+            this.MinimumSize = new System.Drawing.Size(485, 419);
             this.Name = "DependencyForm";
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen;
             this.Text = "Dependency Locations";
             this.Load += new System.EventHandler(this.DependencyForm_Load);
-            this.grpKDiff3.ResumeLayout(false);
-            this.grpKDiff3.PerformLayout();
             this.grpBms.ResumeLayout(false);
             this.grpBms.PerformLayout();
             this.grpBmsPlugin.ResumeLayout(false);
@@ -432,12 +347,6 @@
         }
 
         #endregion
-        private System.Windows.Forms.GroupBox grpKDiff3;
-        private System.Windows.Forms.TextBox txtKDiff3Path;
-        private System.Windows.Forms.Label lblKDiff3Msg;
-        private System.Windows.Forms.Label lblKDiff3Path;
-        private System.Windows.Forms.Button btnKDiff3Path;
-        private System.Windows.Forms.LinkLabel lnkKDiff3;
         private System.Windows.Forms.Label lblPrompt;
         private System.Windows.Forms.GroupBox grpBms;
         private System.Windows.Forms.Label lblBmsMsg;

@@ -12,24 +12,45 @@ using WitcherScriptMerger.Inventory;
 
 namespace WitcherScriptMerger.Tools
 {
-	// In-process, external-binary-free alternative to KDiff3MergeEngine (host project),
-	// built on DiffPlex (MIT-licensed NuGet package)'s ThreeWayDiffer. Not the active
-	// engine by default - see Program.Main (host project) for the "MergeEngine" App.config
-	// switch. See Tools/IMergeEngine.cs for why this interface exists at all: it's
-	// Core/host split scaffolding, not a permanent pluggable-engine abstraction, and a
-	// later unit that removes KDiff3 entirely may delete the interface and inline this
-	// engine's logic directly into FileMerger.
+	// Return type for DiffPlexMergeEngine.Merge/MergeHeadless. Used to live in a deleted
+	// IMergeEngine interface alongside a since-retired KDiff3MergeEngine (see
+	// docs/decisions/kdiff3-retirement.md) - kept as its own small enum, rather than
+	// deleted along with the interface, since FileMerger and this class's own test suite
+	// both consume it as a stable return-type vocabulary independent of any interface.
+	public enum MergeEngineResult
+	{
+		AutoSolved,
+		NeedsManualResolution,
+		Failed,
+	}
+
+	// The sole text-merge engine - in-process, external-binary-free, built on DiffPlex
+	// (MIT-licensed NuGet package)'s ThreeWayDiffer. KDiff3 (formerly the default, and
+	// before that the only, text-merge engine) was retired; see
+	// docs/decisions/kdiff3-retirement.md for the full rationale and for the empirical
+	// KDiff3 process-behavior findings preserved there now that KDiff3.cs itself is gone.
 	//
-	// There's no UI here at all - unlike KDiff3MergeEngine, which can open KDiff3's own
-	// GUI for the interactive path - so "interactive" and "headless" collapse to the same
-	// underlying logic. Merge() just runs MergeHeadless() and maps NeedsManualResolution
-	// to Failed, since IMergeEngine.Merge's contract explicitly forbids ever returning
-	// NeedsManualResolution (that's a headless-only concept - see the interface's doc
-	// comment). One real behavior difference from KDiff3MergeEngine as a result: the
-	// "ReviewEachMerge" setting (show the merge UI even for auto-solvable merges, so the
-	// user can double check it) has nothing to open here and is silently not honored -
-	// there is no in-process equivalent to implement it against.
-	public class DiffPlexMergeEngine : IMergeEngine
+	// FileMerger (Core) constructs and calls this class directly - there's no more
+	// IMergeEngine interface indirection. That interface existed only so Core could reach
+	// a text-merge engine without referencing Tools/KDiff3.cs's Win32 P/Invoke, which had
+	// to stay in the host project; now that KDiff3MergeEngine is gone, DiffPlexMergeEngine
+	// (already Core-side, same as FileMerger) is the only implementation there will ever
+	// be, so the interface no longer bridges anything - keeping it would be premature
+	// abstraction (an interface with exactly one implementation for its whole remaining
+	// life). This isn't a documented repo-wide rule - a prior version of this comment
+	// claimed CONTRIBUTING.md said as much, which code review caught as false (grep
+	// confirms CONTRIBUTING.md never mentions abstraction, interfaces, or "premature" at
+	// all) - it's this deletion's own reasoning, consistent with IMergeEngine.cs's own
+	// former doc comment, which called itself "scaffolding... NOT meant as a permanent
+	// pluggable-engine abstraction" and predicted its own removal once KDiff3 was gone.
+	//
+	// There's no UI here at all, so "interactive" and "headless" collapse to the same
+	// underlying logic: Merge() just runs MergeHeadless() and maps NeedsManualResolution
+	// to Failed, since Merge's contract forbids ever returning NeedsManualResolution
+	// (that's a headless-only concept). This also means a genuine conflict's
+	// conflict-marker sidecar gets written and opened (see MergeHeadless below) on the
+	// interactive path too, since it's the exact same code path underneath.
+	public class DiffPlexMergeEngine
 	{
 		#region Types
 
@@ -76,6 +97,23 @@ namespace WitcherScriptMerger.Tools
 		// are excluded. Flagged in code review, see CLAUDE.md.
 		static readonly Regex WhitespaceRun = new Regex(@"[ \t\r\n\f\v]+", RegexOptions.Compiled);
 
+		// Same exact character set as WhitespaceRun above, as a char[] rather than a
+		// regex - used by NormalizeWhitespace's own Trim() call. A real bug, caught in
+		// code review: NormalizeWhitespace used to call the parameterless string.Trim(),
+		// which trims by char.IsWhiteSpace - the full Unicode whitespace category,
+		// including NBSP - silently undoing this class's whole stated reason for using a
+		// narrow ASCII-only regex in the first place, but only at the leading/trailing
+		// edges of the joined, collapsed text (WhitespaceRun itself was always correctly
+		// ASCII-only for internal runs). Concretely: oldPieces=["Hello\u00A0"] (a literal
+		// U+00A0 NBSP, written out explicitly here since it's visually indistinguishable
+		// from a plain space in most editors/diffs - the same reason the regression test
+		// for this uses the same \u00A0 escape rather than a literal character),
+		// newPieces=["Hello"] collapse to the same "Hello" after Trim() strips the edge
+		// NBSP, silently auto-resolving as whitespace-only a case that should stay a
+		// genuine conflict - exactly the NBSP-vs-space content-loss scenario the comment
+		// above already warned about, just missed for the edges specifically.
+		static readonly char[] WhitespaceChars = { ' ', '\t', '\r', '\n', '\f', '\v' };
+
 		#endregion
 
 		public MergeEngineResult Merge(
@@ -88,11 +126,28 @@ namespace WitcherScriptMerger.Tools
 			return result == MergeEngineResult.NeedsManualResolution ? MergeEngineResult.Failed : result;
 		}
 
+		// openConflictMarkers defaults to true (matching Merge()'s interactive-path
+		// behavior, and every pre-existing headless caller) - FileMerger.MergeTextHeadless
+		// is the one caller that passes false, for a dry run (see MergeConflictsHeadless's
+		// dryRun parameter): a dry run's whole contract is "preview only, no side effects
+		// a user didn't ask for" (the MCP merge_conflicts tool's own dryRun description
+		// promises no merged output, bundle repack, or MergeInventory.xml write), and
+		// FileOpener.Open launching a real process is exactly that kind of surprise side
+		// effect for an operation whose entire point is to be inspectable without
+		// consequence - whatever the OS resolves that launch to, an editor if ".conflict"
+		// has an association or its own "how do you want to open this?" picker if not
+		// (confirmed both are possible - see MergeHeadless's own comment below). The
+		// conflict-marker sidecar itself is still written either way (pre-existing
+		// behavior, not something this parameter changes) - only the auto-open is
+		// conditional, since that's the specific side effect that turns a preview into
+		// something visibly disruptive (a window popping up per conflict for a mods
+		// folder with many of them).
 		public MergeEngineResult MergeHeadless(
 			FileMerger.MergeSource source1,
 			FileMerger.MergeSource source2,
 			FileInfo vanillaFile,
-			string outputPath)
+			string outputPath,
+			bool openConflictMarkers = true)
 		{
 			var hasVanillaVersion = vanillaFile != null && vanillaFile.Exists;
 
@@ -109,16 +164,14 @@ namespace WitcherScriptMerger.Tools
 			// GetUnpackedFiles leaves _vanillaFile null), but this guard applies
 			// unconditionally to any conflict with no vanilla file, flat or bundled -
 			// safest, and consistent with HeadlessMergeNotifier's non-destructive
-			// defaults, is to refuse rather than guess. Note this is a real, deliberate
-			// behavior difference from KDiff3MergeEngine: Tools/KDiff3.cs's BuildArgs has
-			// no equivalent guard and always attempts a real (if degraded, vanilla-less)
+			// defaults, is to refuse rather than guess. The now-retired KDiff3 engine had
+			// no equivalent guard - it always attempted a real (if degraded, vanilla-less)
 			// 2-way --auto merge in this situation instead of refusing outright, because
-			// KDiff3 itself has a coherent notion of a 2-file diff/merge - DiffPlex's
-			// ThreeWayDiffer, as used here, does not, so there's no equally meaningful
-			// fallback to attempt. Which conflicts even get attempted can therefore differ
-			// depending on which engine is configured; flagged in code review, not fixed
-			// by building a parallel 2-way DiffPlex merge path since that's new scope
-			// beyond what this engine set out to replicate - see CLAUDE.md.
+			// KDiff3 itself had a coherent notion of a 2-file diff/merge that DiffPlex's
+			// ThreeWayDiffer, as used here, does not, so there was no equally meaningful
+			// fallback to attempt (see docs/decisions/kdiff3-retirement.md). Not fixed by
+			// building a parallel 2-way DiffPlex merge path here since that's new scope
+			// beyond what this engine set out to replicate.
 			if (!hasVanillaVersion)
 			{
 				AppState.Notifier.ShowMessage(
@@ -128,20 +181,16 @@ namespace WitcherScriptMerger.Tools
 				return MergeEngineResult.NeedsManualResolution;
 			}
 
-			// Same "merging an updated mod file into an existing merge chain" guard
-			// KDiff3.RunHeadless applies (see its comment for the full reasoning) - kept
-			// duplicated here rather than hoisted into FileMerger since that's shared
-			// orchestration code outside this unit's scope; a later unit collapsing the
-			// merge engines should consider moving it there instead of keeping two copies.
-			// One real consequence of the duplication (vs. hoisting into FileMerger,
-			// which both Merge and MergeHeadless funnel through) worth calling out: since
-			// Merge() (the interactive path) just delegates straight to MergeHeadless()
-			// here (see this class's header comment - there's no UI to fall back to),
-			// this outdated-hash case comes back as Failed on the interactive path too,
-			// where KDiff3MergeEngine's own interactive Run() instead opens KDiff3's GUI
-			// for manual review. That gap already exists for every other kind of conflict
-			// on the DiffPlex interactive path (no UI here at all yet), so it isn't a new
-			// asymmetry this guard introduces - flagged in code review, see CLAUDE.md.
+			// The now-retired KDiff3.RunHeadless applied this same "merging an updated mod
+			// file into an existing merge chain" guard (see docs/decisions/kdiff3-retirement.md
+			// for its reasoning, preserved there since the code that motivated it is gone).
+			// Kept here rather than hoisted into FileMerger since that's shared
+			// orchestration code outside this class's scope - a future change collapsing
+			// this further could consider moving it there instead. Since Merge() (the
+			// interactive path) just delegates straight to MergeHeadless() (see this
+			// class's header comment - there's no UI to fall back to), this outdated-hash
+			// case comes back as Failed on the interactive path too, same as every other
+			// kind of conflict on this engine's interactive path.
 			if (source1.TextFile.FullName.EqualsIgnoreCase(outputPath)
 				&& source2.Hash != null && source2.Hash.IsOutdated)
 			{
@@ -168,14 +217,15 @@ namespace WitcherScriptMerger.Tools
 				// (see BuildMerge's comment) - don't write anything, including a sidecar:
 				// the "conflict marker" content itself would have been built from the
 				// same inconsistent piece indices, so it can't be trusted either. This is
-				// the one case where DiffPlexMergeEngine can't even offer a conflict-marker
-				// starting point the way KDiff3 always can - genuinely needs the source
-				// files opened side by side.
+				// the one case where DiffPlexMergeEngine can't offer a conflict-marker
+				// starting point at all - genuinely needs the source files opened side by
+				// side and compared by hand.
 				AppState.Notifier.ShowMessage(
 					$"Skipped {source1.Name} + {source2.Name}: the automatic 3-way merge algorithm hit " +
 					$"an internal inconsistency it couldn't safely recover from ({ex.Message}) - a known " +
 					"limitation of the underlying DiffPlex library for certain multi-edit conflicts, see " +
-					"CLAUDE.md. Needs manual resolution (e.g. via KDiff3).",
+					"CLAUDE.md. Needs manual resolution - open the source mod files directly to compare " +
+					"and resolve.",
 					"Skipped", NotifyButtons.OK, DialogIcon.Warning);
 				return MergeEngineResult.NeedsManualResolution;
 			}
@@ -202,20 +252,67 @@ namespace WitcherScriptMerger.Tools
 			// (see GetConflictMarkerPath) keeps outputPath itself untouched (so retries
 			// behave exactly as if this merge had never been attempted) while still
 			// producing well-formed conflict-marker output at a predictable, computable
-			// location for a later unit to open in the user's default text editor.
-			FileEncoding.WriteUtf16(GetConflictMarkerPath(outputPath), result.MergedText);
+			// location this method opens in the user's default editor below.
+			var sidecarPath = GetConflictMarkerPath(outputPath);
+			FileEncoding.WriteUtf16(sidecarPath, result.MergedText);
 
+			// Path.GetFullPath here (message text only - the FileOpener.Open call below
+			// still passes sidecarPath as-is) since Paths.DiffPlexConflictsDirectory is
+			// relative (resolved against Environment.CurrentDirectory - see this class's
+			// header comment / CLAUDE.md's "Interactive vs. headless split" section for
+			// when that's pinned vs. not). A relative path in a user-facing message that
+			// might be the only record of where to find a conflict is close to useless if
+			// they read it later from a different working directory than the one that
+			// wrote it - the absolute form is unambiguous regardless of when/where it's read.
+			var sidecarFullPath = Path.GetFullPath(sidecarPath);
+
+			// Opened BEFORE the notifier message, deliberately reordered from an earlier
+			// version of this method (code review caught the problem with the original
+			// order): the message needs FileOpener.Open's own bool return to pick its
+			// wording, which requires calling it first. That bool distinguishes only
+			// "Process.Start succeeded" from "Process.Start threw" (e.g.
+			// ERROR_NO_ASSOCIATION, swallowed by FileOpener.TryOpen's own catch, returning
+			// false) - it is NOT a guarantee an editor actually came up. Confirmed
+			// empirically during this feature's own end-to-end verification: on the
+			// machine used for testing, ".conflict" had no registered file association, so
+			// Process.Start succeeded by launching OpenWith.exe (the OS's own "how do you
+			// want to open this file?" picker) - opened came back true, and the message
+			// below says "opened it for review" by its own definition of "opened" (the
+			// call didn't fail), even though what the user actually sees is a picker
+			// dialog, not directly an editor. Still strictly more honest than an
+			// unconditional "attempting to open it now" regardless of outcome, which is
+			// what this message used to say. Best-effort either way: a failed open doesn't
+			// change the result below, the sidecar is on disk regardless.
+			// Skipped entirely for a dry run (openConflictMarkers = false - see this
+			// method's parameter comment), which also means dryRun's message always uses
+			// the "open it manually" wording, never claims an open that was never
+			// attempted. One consequence of this ordering worth stating plainly: on the
+			// GUI's interactive path, AppState.Notifier.ShowMessage is a real blocking
+			// modal, so the editor (if any) now opens BEHIND that modal instead of after
+			// it - arguably better (the file's already up by the time the user dismisses
+			// the dialog) but a deliberate change from this method's original "acknowledge
+			// the skip, then the editor opens" sequencing, not an accident.
+			var opened = openConflictMarkers && FileOpener.Open(sidecarPath);
+			var openSuffix = !openConflictMarkers
+				? " - open it manually to review (dry run preview)."
+				: opened
+					? " - opened it for review."
+					: " - open it manually to review.";
 			AppState.Notifier.ShowMessage(
 				$"Skipped {source1.Name} + {source2.Name}: genuine conflict, needs manual resolution. " +
-				$"Conflict markers were written to {GetConflictMarkerPath(outputPath)} for review.",
+				$"Conflict markers were written to {sidecarFullPath}{openSuffix}",
 				"Skipped", NotifyButtons.OK, DialogIcon.Warning);
+
 			return MergeEngineResult.NeedsManualResolution;
 		}
 
 		// No external executable - DiffPlex is an in-process managed library, so there's
-		// nothing to validate a path for. Note this doesn't remove QuickBMS/wcc_lite from
-		// Paths.ValidateDependencyPaths()'s checks - those are still required for bundle
-		// content regardless of which text-merge engine is active.
+		// nothing to validate a path for. No longer called from
+		// Paths.ValidateDependencyPaths() (that call site was removed along with
+		// IMergeEngine - QuickBMS/wcc_lite are still checked there directly, and remain
+		// required regardless of the text-merge engine); kept here since it's directly
+		// unit-tested and a trivially-true predicate costs nothing to keep around for any
+		// future caller.
 		public bool ValidateExePath() => true;
 
 		// Where a conflict-marker file is written when a merge can't be auto-solved -
@@ -246,7 +343,8 @@ namespace WitcherScriptMerger.Tools
 		// string.GetHashCode() was deliberately not used here - .NET randomizes string
 		// hash codes per process by default, so it isn't stable across runs, unlike
 		// XxHash32. This is still a computable, not merely a discoverable-by-browsing,
-		// location: a later unit wiring up "open in editor" can call this same method.
+		// location: MergeHeadless calls this same method right before opening the file
+		// (via FileOpener) for the exact path it just wrote.
 		public static string GetConflictMarkerPath(string outputPath)
 		{
 			var pathHash = XxHash32.HashToUInt32(Encoding.UTF8.GetBytes(outputPath), 0);
@@ -277,16 +375,17 @@ namespace WitcherScriptMerger.Tools
 		//  - Purely-whitespace-only conflicts auto-resolve instead of producing markers,
 		//    mirroring KDiff3's --cs "WhiteSpace3FileMergeDefault=2" (verified against the
 		//    KDiff3 source: value 2 means "always pick input B", which is oldText/oldLabel
-		//    here, matching KDiff3.BuildArgs' own file order of vanilla/source1/source2 -
-		//    see CLAUDE.md's KDiff3 compatibility notes).
+		//    here, matching the now-retired KDiff3 engine's own file order of
+		//    vanilla/source1/source2 - see docs/decisions/kdiff3-retirement.md).
 		//  - Genuine conflicts are rendered as git/diff3-style conflict markers labeled
 		//    with the actual mod names, not DiffPlex's generic "old"/"base"/"new".
 		// Uses LineEndingsPreservingChunker (not DiffPlex's default LineChunker) so
 		// unchanged/single-side-changed content round-trips through unmodified, keeping
 		// each such line's original line-ending byte-for-byte - only synthetic content
 		// this method itself adds (conflict marker lines) uses an explicit "\r\n" to
-		// match vanilla .ws files' own DOS line endings (KDiff3.BuildArgs' own
-		// --cs "LineEndStyle=1" - confirmed against the KDiff3 source, value 1 is DOS).
+		// match vanilla .ws files' own DOS line endings (the now-retired KDiff3 engine's
+		// own --cs "LineEndStyle=1" - confirmed against the KDiff3 source, value 1 is DOS;
+		// see docs/decisions/kdiff3-retirement.md).
 		public static MergeTextResult BuildMerge(string baseText, string oldText, string newText, string oldLabel, string newLabel)
 		{
 			// ThreeWayDiffer.CreateDiffs throws its own ArgumentNullException for a null
@@ -335,8 +434,13 @@ namespace WitcherScriptMerger.Tools
 			// rates of both failure modes, this is caught here (an exception) and
 			// verified for (the silent case, via the post-loop count check below) rather
 			// than trusted - MergeHeadless treats either as "needs manual resolution"
-			// rather than ever risking corrupted merge output. This is also a primary
-			// reason DiffPlexMergeEngine isn't the default engine yet (see Program.cs).
+			// rather than ever risking corrupted merge output. This measured, non-zero
+			// failure rate is the primary reason retiring KDiff3 in favor of this engine
+			// was a deliberate tradeoff, not a strict improvement - see
+			// docs/decisions/kdiff3-retirement.md. (There used to be a separate
+			// engine-selection switch in Program.cs that kept this engine non-default
+			// specifically because of this gap - that switch and KDiff3 itself are both
+			// gone now; this engine is the sole engine, gap and all.)
 			try
 			{
 				foreach (var block in diffResult.DiffBlocks)
@@ -502,7 +606,9 @@ namespace WitcherScriptMerger.Tools
 
 		static string NormalizeWhitespace(IEnumerable<string> pieces)
 		{
-			return WhitespaceRun.Replace(string.Concat(pieces), " ").Trim();
+			// Trim(WhitespaceChars), not the parameterless Trim() - see WhitespaceChars'
+			// own comment for the real NBSP-related bug this guards against.
+			return WhitespaceRun.Replace(string.Concat(pieces), " ").Trim(WhitespaceChars);
 		}
 
 		#endregion

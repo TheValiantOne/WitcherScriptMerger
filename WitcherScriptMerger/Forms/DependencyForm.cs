@@ -13,8 +13,7 @@ namespace WitcherScriptMerger.Forms
 		{
 			get
 			{
-				return (!txtKDiff3Path.Text.EqualsIgnoreCase(KDiff3.ExePath) ||
-						!txtBmsPath.Text.EqualsIgnoreCase(QuickBms.ExePath) ||
+				return (!txtBmsPath.Text.EqualsIgnoreCase(QuickBms.ExePath) ||
 						!txtBmsPluginPath.Text.EqualsIgnoreCase(QuickBms.PluginPath) ||
 						!txtWccLitePath.Text.EqualsIgnoreCase(WccLite.ExePath));
 			}
@@ -27,7 +26,6 @@ namespace WitcherScriptMerger.Forms
 
 		void DependencyForm_Load(object sender, EventArgs e)
 		{
-			txtKDiff3Path.Text = KDiff3.ExePath;
 			txtBmsPath.Text = QuickBms.ExePath;
 			txtBmsPluginPath.Text = QuickBms.PluginPath;
 			txtWccLitePath.Text = WccLite.ExePath;
@@ -37,7 +35,6 @@ namespace WitcherScriptMerger.Forms
 		void btnOK_Click(object sender, EventArgs e)
 		{
 			var allValid =
-				Color.LightGreen == txtKDiff3Path.BackColor &&
 				Color.LightGreen == txtBmsPath.BackColor &&
 				Color.LightGreen == txtBmsPluginPath.BackColor &&
 				Color.LightGreen == txtWccLitePath.BackColor;
@@ -55,7 +52,6 @@ namespace WitcherScriptMerger.Forms
 
 			if (AreAnyPathsChanged)
 			{
-				KDiff3.ExePath = UpdatePathSetting(KDiff3.ExePath, txtKDiff3Path.Text, "Kdiff3Path");
 				QuickBms.ExePath = UpdatePathSetting(QuickBms.ExePath, txtBmsPath.Text, "QuickBmsPath");
 				QuickBms.PluginPath = UpdatePathSetting(QuickBms.PluginPath, txtBmsPluginPath.Text, "QuickBmsPluginPath");
 				WccLite.ExePath = UpdatePathSetting(WccLite.ExePath, txtWccLitePath.Text, "WccLitePath");
@@ -81,11 +77,6 @@ namespace WitcherScriptMerger.Forms
 		}
 
 		#region Selecting Files
-
-		void btnKDiff3Path_Click(object sender, EventArgs e)
-		{
-			GetUserFileChoice(txtKDiff3Path, "Executables|*.exe");
-		}
 
 		void btnBmsPath_Click(object sender, EventArgs e)
 		{
@@ -115,11 +106,6 @@ namespace WitcherScriptMerger.Forms
 		#endregion
 
 		#region Clicking Links
-
-		void lnkKDiff3_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e)
-		{
-			Process.Start("http://kdiff3.sourceforge.net/");
-		}
 
 		void lnkBms_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e)
 		{

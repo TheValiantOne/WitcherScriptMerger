@@ -3,19 +3,19 @@ using System.Text;
 
 namespace WitcherScriptMerger.Tools
 {
-	// Shared UTF-16LE+BOM normalization, used by every merge engine. KDiff3MergeEngine
-	// (host project) needs an on-disk temp copy since it shells out to an external exe
-	// that only accepts file paths; DiffPlexMergeEngine (Core) merges in-process and only
-	// needs the text itself, via ReadAnyEncoding/WriteUtf16 below - EnsureUtf16File exists
-	// for the former, kept here too so any future file-based tool can reuse it instead of
-	// duplicating this logic (this method used to be a private copy inside
-	// WitcherScriptMerger/Tools/KDiff3.cs::EnsureUtf16Encoding).
+	// Shared UTF-16LE+BOM normalization. DiffPlexMergeEngine merges in-process and only
+	// needs the text itself, via ReadAnyEncoding/WriteUtf16 below; EnsureUtf16File (an
+	// on-disk temp copy, for a tool that has to be handed a file path rather than raw
+	// text) has no in-repo caller since KDiff3MergeEngine's retirement (see
+	// docs/decisions/kdiff3-retirement.md - this method used to be a private copy inside
+	// WitcherScriptMerger/Tools/KDiff3.cs::EnsureUtf16Encoding) but is kept, and still
+	// directly unit-tested, for any future file-based tool that needs it.
 	//
 	// Vanilla .ws files are UTF-16LE with a BOM; mod authors' files are often plain
 	// UTF-8/ASCII with no BOM (confirmed against real files on a live install) - see
-	// CLAUDE.md's "KDiff3 input encoding" compatibility constraint for why normalizing UP
-	// to UTF-16LE (never down to UTF-8) matters: the game may not load a merged .ws file
-	// that isn't UTF-16LE.
+	// CLAUDE.md's "Text-merge input encoding" compatibility constraint for why normalizing
+	// UP to UTF-16LE (never down to UTF-8) matters: the game may not load a merged .ws
+	// file that isn't UTF-16LE.
 	public static class FileEncoding
 	{
 		// UTF-16LE with BOM - matches vanilla .ws file encoding. Never normalize merge
@@ -71,9 +71,10 @@ namespace WitcherScriptMerger.Tools
 
 		// Ensures an on-disk copy of `file` is UTF-16LE+BOM, writing a temp copy under
 		// Paths.TempBundleContent\Encoding\<role>\ only when a copy is actually needed.
-		// For tools that must be handed a file path (KDiff3.exe's command line) rather than
-		// raw text - an in-process engine that reads/writes strings directly doesn't need
-		// this at all, just ReadAnyEncoding/WriteUtf16 above.
+		// For a tool that must be handed a file path rather than raw text (the now-retired
+		// KDiff3 engine's command line was the original, and so far only, such caller -
+		// see docs/decisions/kdiff3-retirement.md) - an in-process engine that reads/writes
+		// strings directly doesn't need this at all, just ReadAnyEncoding/WriteUtf16 above.
 		public static string EnsureUtf16File(FileInfo file, string role)
 		{
 			if (HasUtf16LeBom(file.FullName))

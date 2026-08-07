@@ -1,5 +1,14 @@
 # Vortex Extension Design (Unit 4)
 
+**Note (post-KDiff3-retirement):** this document describes WSM's architecture as of
+its own writing, when KDiff3 was still a required on-disk dependency alongside
+QuickBMS/wcc_lite. KDiff3 has since been retired in favor of an in-process,
+external-binary-free merge engine — see `docs/decisions/kdiff3-retirement.md`. This
+materially *simplifies* several points below that treated KDiff3/QuickBMS/wcc_lite as a
+combined packaging problem (e.g. §2.2, the "KDiff3/QuickBMS/wcc_lite are a separate
+problem" point) — only QuickBMS/wcc_lite remain. Not otherwise updated inline below;
+read the KDiff3-specific mentions that follow as historical context, not current fact.
+
 **Status: design document only.** Nothing in this file is implemented. There is no
 TypeScript/Node scaffolding anywhere in this repository, and this unit does not add
 any — that work is explicitly deferred to a later, separate implementation batch. This

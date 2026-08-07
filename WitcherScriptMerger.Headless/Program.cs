@@ -9,7 +9,6 @@ using WitcherScriptMerger.Cli;
 using WitcherScriptMerger.Inventory;
 using WitcherScriptMerger.LoadOrder;
 using WitcherScriptMerger.Mcp;
-using WitcherScriptMerger.Tools;
 
 namespace WitcherScriptMerger.Headless
 {
@@ -38,12 +37,12 @@ namespace WitcherScriptMerger.Headless
 			// thing, before even inspecting args.
 			Environment.CurrentDirectory = AppContext.BaseDirectory;
 
-			// The only IMergeEngine implementation available here - KDiff3MergeEngine
-			// needs Tools/KDiff3.cs's Win32 P/Invoke, which stays in the WinForms host
-			// project and can't be referenced from a project meant to build and run on
-			// Linux. Unlike WitcherScriptMerger/Program.cs, there's no "MergeEngine"
-			// App.config switch here at all - this host has exactly one engine, always.
-			AppState.MergeEngine = new DiffPlexMergeEngine();
+			// No engine setup needed here (or in WitcherScriptMerger/Program.cs, the
+			// WinForms host) - FileMerger builds its own DiffPlexMergeEngine directly now
+			// that KDiff3 and the IMergeEngine interface that used to sit in front of it
+			// are gone (see docs/decisions/kdiff3-retirement.md and CLAUDE.md's
+			// "Interactive vs. headless split" section) - there's no more engine-selection
+			// step for either host to perform at startup.
 
 			if (args.Length == 0)
 			{

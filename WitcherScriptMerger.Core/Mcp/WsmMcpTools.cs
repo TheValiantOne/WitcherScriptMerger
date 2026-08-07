@@ -48,8 +48,9 @@ namespace WitcherScriptMerger.Mcp
 		}
 
 		[McpServerTool(Name = "merge_conflicts"), Description(
-			"Merges detected conflicts headlessly - never opens KDiff3's GUI; conflicts that can't " +
-			"be auto-solved are skipped and reported, not merged. Restrict to specific files with " +
+			"Merges detected conflicts headlessly; conflicts that can't be auto-solved are skipped " +
+			"and reported, not merged - a conflict-marker sidecar file is written and opened in the " +
+			"default editor for manual review instead. Restrict to specific files with " +
 			"relativePaths (default: every detected conflict); override a file's mod merge order " +
 			"with orderOverrides (default merge order otherwise matches the game's own load order). " +
 			"Set dryRun to preview which conflicts would auto-solve without writing any merged " +
@@ -148,12 +149,12 @@ namespace WitcherScriptMerger.Mcp
 
 		[McpServerTool(Name = "get_status"), Description(
 			"Reports WSM's current configuration and dependency status: resolved game/mods " +
-			"directories, whether the text-merge engine (KDiff3 or DiffPlex) and QuickBMS/" +
-			"wcc_lite are found, the configured merged-mod name, and the current conflict " +
-			"count. textMergeDependenciesValid alone is enough for flat-file (.ws/.xml) " +
-			"conflicts; bundleDependenciesValid additionally gates bundle-content conflicts " +
-			"- a host with no QuickBMS/wcc_lite configured can still scan/merge flat-file " +
-			"conflicts with only the former true.")]
+			"directories, whether the (in-process, always-available) text-merge engine and " +
+			"QuickBMS/wcc_lite are found, the configured merged-mod name, and the current " +
+			"conflict count. textMergeDependenciesValid alone is enough for flat-file " +
+			"(.ws/.xml) conflicts; bundleDependenciesValid additionally gates bundle-content " +
+			"conflicts - a host with no QuickBMS/wcc_lite configured can still scan/merge " +
+			"flat-file conflicts with only the former true.")]
 		public static object GetStatus()
 		{
 			// Split rather than the combined Paths.ValidateDependencyPaths() so a host
@@ -213,7 +214,9 @@ namespace WitcherScriptMerger.Mcp
 		{
 			if (!Paths.ValidateTextMergeDependencies())
 				throw new InvalidOperationException(
-					"The configured text-merge engine (KDiff3 or DiffPlex) is missing or misconfigured.");
+					"The text-merge engine is unavailable. This should not happen - DiffPlexMergeEngine " +
+					"is in-process and requires no external configuration; Paths.ValidateTextMergeDependencies() " +
+					"is kept only as a named seam for a future engine that might have a real dependency.");
 
 			if (!Directory.Exists(Paths.ModsDirectory))
 				throw new InvalidOperationException("Mods directory not found - check GameDirectory/ModsDirectory in App.config.");

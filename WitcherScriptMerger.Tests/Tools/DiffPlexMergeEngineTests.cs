@@ -22,6 +22,22 @@ namespace WitcherScriptMerger.Tests.Tools
 	// entire test run, not just fail one test. MergeSource's fields are all public, so
 	// tests build it directly instead - this exercises DiffPlexMergeEngine exactly the
 	// same way, since it only ever reads TextFile/Hash/Name off the struct.
+	//
+	// Any fixture that reaches a genuine-conflict outcome now also reaches
+	// FileOpener.Open (see MergeHeadless's comment) - those fixtures swap it for a stub
+	// in a try/finally around the real FileOpener.TryOpen, so no test run ever actually
+	// launches a process. FileOpener.Open is a single process-wide static field, so
+	// swapping it per-test is only safe because nothing else touches it concurrently -
+	// fixtures within this one class run sequentially (xunit's default: no [Collection]
+	// attribute here, so this class is its own implicit collection, and collections, not
+	// individual test classes, are xunit's actual unit of parallelism), but a *different*
+	// test class that also exercises DiffPlexMergeEngine.MergeHeadless/Merge on a
+	// genuine-conflict fixture would be a different collection by that same default, and
+	// could run concurrently with this one, racing this same static field. If a future
+	// test class needs to do that, it needs either an explicit shared, non-parallel
+	// [Collection] with this one, or its own equivalent stub-and-restore discipline
+	// guaranteed not to overlap with this class's - don't assume the sequencing this
+	// class relies on extends automatically to a second class touching the same static.
 	public class DiffPlexMergeEngineTests
 	{
 		[Fact]
@@ -125,8 +141,14 @@ namespace WitcherScriptMerger.Tests.Tools
 			// full MergeHeadless path: since the "conflict marker" content itself would
 			// have been built from the same untrustworthy piece indices, MergeHeadless
 			// must not write a sidecar here either - this is the one case where
-			// DiffPlexMergeEngine can't even offer a conflict-marker starting point.
+			// DiffPlexMergeEngine can't even offer a conflict-marker starting point. No
+			// sidecar also means FileOpener.Open must never fire here - stubbed with a
+			// call counter (rather than the default real implementation) specifically to
+			// verify that negative, not just to avoid a real process launch.
 			var dir = CreateTempDir();
+			var previousOpener = FileOpener.Open;
+			var openCallCount = 0;
+			FileOpener.Open = _ => { ++openCallCount; return true; };
 			try
 			{
 				var vanillaPath = Path.Combine(dir, "vanilla.ws");
@@ -146,9 +168,11 @@ namespace WitcherScriptMerger.Tests.Tools
 				Assert.Equal(MergeEngineResult.NeedsManualResolution, result);
 				Assert.False(File.Exists(outputPath));
 				Assert.False(File.Exists(DiffPlexMergeEngine.GetConflictMarkerPath(outputPath)));
+				Assert.Equal(0, openCallCount);
 			}
 			finally
 			{
+				FileOpener.Open = previousOpener;
 				Directory.Delete(dir, true);
 			}
 		}
@@ -165,6 +189,32 @@ namespace WitcherScriptMerger.Tests.Tools
 			var baseText = "a();\r\n   \r\nb();\r\n";
 			var oldText = "a();\r\n\r\nb();\r\n";      // mod1: trims trailing spaces, line stays blank
 			var newText = "a();\r\nb();\r\n";           // mod2: deletes the blank line entirely
+
+			var result = DiffPlexMergeEngine.BuildMerge(baseText, oldText, newText, "modA", "modB");
+
+			Assert.True(result.HasConflicts);
+			Assert.Contains("<<<<<<< modA", result.MergedText);
+			Assert.Contains(">>>>>>> modB", result.MergedText);
+		}
+
+		[Fact]
+		public void BuildMerge_TrailingNbspVersusPlainSpace_IsNotMisclassifiedAsWhitespaceOnly()
+		{
+			// Regression test for a real bug caught in code review: NormalizeWhitespace
+			// used to call the parameterless string.Trim(), which (unlike the
+			// WhitespaceRun regex used for internal runs) trims by the full Unicode
+			// whitespace category - including NBSP (U+00A0) - at the leading/trailing
+			// edges of the joined, collapsed comparison text. That silently undid this
+			// class's own stated NBSP-preservation guarantee (see WhitespaceRun's own
+			// comment) whenever the differing NBSP happened to land at a piece boundary,
+			// which a trailing one on the last differing line always does. One mod's line
+			// ends in a real NBSP (plausible in localized dialogue text); the other's the
+			// same line without it - a genuine content difference that must stay a
+			// conflict, not silently collapse to "equal" once the trailing NBSP is
+			// (incorrectly) trimmed away along with the line's own \r\n.
+			var baseText = "x = 1;\r\n";
+			var oldText = "x = 2;\u00A0\r\n";
+			var newText = "x = 2;\r\n";
 
 			var result = DiffPlexMergeEngine.BuildMerge(baseText, oldText, newText, "modA", "modB");
 
@@ -232,6 +282,12 @@ namespace WitcherScriptMerger.Tests.Tools
 		public void MergeHeadless_GenuineConflict_WritesSidecarMarkerFileNotOutputPath()
 		{
 			var dir = CreateTempDir();
+			var previousOpener = FileOpener.Open;
+			// A genuine conflict now also opens the sidecar via FileOpener (see
+			// MergeHeadless_GenuineConflict_OpensSidecarViaFileOpener below) - stubbed out
+			// here so this fixture, which only cares about the sidecar file itself, never
+			// launches a real process during a test run.
+			FileOpener.Open = _ => true;
 			try
 			{
 				var vanillaPath = Path.Combine(dir, "vanilla.ws");
@@ -267,6 +323,98 @@ namespace WitcherScriptMerger.Tests.Tools
 			}
 			finally
 			{
+				FileOpener.Open = previousOpener;
+				Directory.Delete(dir, true);
+			}
+		}
+
+		[Fact]
+		public void MergeHeadless_GenuineConflict_OpensSidecarViaFileOpener()
+		{
+			// The headline new-user-experience change this unit adds: a genuine conflict's
+			// sidecar isn't just written to disk, it's opened for the user via FileOpener -
+			// the same call fires whether this was reached via the CLI/MCP headless path
+			// directly or via the GUI's interactive Merge() (which just delegates to this
+			// method). FileOpener.Open is swapped for a recording stub rather than letting
+			// the real implementation run, so this test verifies the call - the exact path
+			// passed - without actually launching a process during a test run.
+			var dir = CreateTempDir();
+			var previousOpener = FileOpener.Open;
+			string openedPath = null;
+			var openCallCount = 0;
+			FileOpener.Open = path =>
+			{
+				openedPath = path;
+				++openCallCount;
+				return true;
+			};
+			try
+			{
+				var vanillaPath = Path.Combine(dir, "vanilla.ws");
+				FileEncoding.WriteUtf16(vanillaPath, "x = 1;\r\n");
+				var mod1Path = Path.Combine(dir, "mod1.ws");
+				FileEncoding.WriteUtf16(mod1Path, "x = 2;\r\n");
+				var mod2Path = Path.Combine(dir, "mod2.ws");
+				FileEncoding.WriteUtf16(mod2Path, "x = 3;\r\n");
+
+				var outputPath = Path.Combine(dir, "merged.ws");
+
+				var source1 = new FileMerger.MergeSource { TextFile = new FileInfo(mod1Path), Name = "modA" };
+				var source2 = new FileMerger.MergeSource { TextFile = new FileInfo(mod2Path), Name = "modB" };
+
+				var result = new DiffPlexMergeEngine().MergeHeadless(source1, source2, new FileInfo(vanillaPath), outputPath);
+
+				Assert.Equal(MergeEngineResult.NeedsManualResolution, result);
+				Assert.Equal(1, openCallCount);
+				Assert.Equal(DiffPlexMergeEngine.GetConflictMarkerPath(outputPath), openedPath);
+			}
+			finally
+			{
+				FileOpener.Open = previousOpener;
+				Directory.Delete(dir, true);
+			}
+		}
+
+		[Fact]
+		public void MergeHeadless_OpenConflictMarkersFalse_WritesSidecarButNeverCallsFileOpener()
+		{
+			// Regression test for a real bug caught in code review before this shipped:
+			// FileMerger.MergeTextHeadless passes openConflictMarkers: !dryRun, so a dry
+			// run (MergeConflictsHeadless(dryRun: true), including the MCP merge_conflicts
+			// tool's dryRun option) must never launch a real editor/process for a genuine
+			// conflict - that's exactly the kind of surprise side effect a "preview only"
+			// operation promises not to have. The sidecar file itself is still written
+			// (pre-existing behavior, unchanged by this parameter) so a dry run's summary
+			// can still point at well-formed conflict-marker content if a caller wants to
+			// inspect it - only the auto-open is suppressed.
+			var dir = CreateTempDir();
+			var previousOpener = FileOpener.Open;
+			var openCallCount = 0;
+			FileOpener.Open = _ => { ++openCallCount; return true; };
+			try
+			{
+				var vanillaPath = Path.Combine(dir, "vanilla.ws");
+				FileEncoding.WriteUtf16(vanillaPath, "x = 1;\r\n");
+				var mod1Path = Path.Combine(dir, "mod1.ws");
+				FileEncoding.WriteUtf16(mod1Path, "x = 2;\r\n");
+				var mod2Path = Path.Combine(dir, "mod2.ws");
+				FileEncoding.WriteUtf16(mod2Path, "x = 3;\r\n");
+
+				var outputPath = Path.Combine(dir, "merged.ws");
+
+				var source1 = new FileMerger.MergeSource { TextFile = new FileInfo(mod1Path), Name = "modA" };
+				var source2 = new FileMerger.MergeSource { TextFile = new FileInfo(mod2Path), Name = "modB" };
+
+				var result = new DiffPlexMergeEngine().MergeHeadless(
+					source1, source2, new FileInfo(vanillaPath), outputPath, openConflictMarkers: false);
+
+				Assert.Equal(MergeEngineResult.NeedsManualResolution, result);
+				Assert.True(File.Exists(DiffPlexMergeEngine.GetConflictMarkerPath(outputPath)));
+				Assert.Equal(0, openCallCount);
+			}
+			finally
+			{
+				FileOpener.Open = previousOpener;
 				Directory.Delete(dir, true);
 			}
 		}
@@ -280,6 +428,8 @@ namespace WitcherScriptMerger.Tests.Tools
 			// to the fresh output indefinitely - MergeHeadless deletes it on the
 			// AutoSolved path specifically to avoid that.
 			var dir = CreateTempDir();
+			var previousOpener = FileOpener.Open;
+			FileOpener.Open = _ => true;  // see the fixture above for why this is stubbed
 			try
 			{
 				var vanillaPath = Path.Combine(dir, "vanilla.ws");
@@ -309,6 +459,7 @@ namespace WitcherScriptMerger.Tests.Tools
 			}
 			finally
 			{
+				FileOpener.Open = previousOpener;
 				Directory.Delete(dir, true);
 			}
 		}
@@ -350,11 +501,15 @@ namespace WitcherScriptMerger.Tests.Tools
 		[Fact]
 		public void Merge_Interactive_NeverReturnsNeedsManualResolution()
 		{
-			// IMergeEngine.Merge's contract explicitly forbids ever returning
-			// NeedsManualResolution (that's a headless-only concept) - DiffPlexMergeEngine
-			// has no UI to resolve a conflict interactively, so a genuine conflict must
-			// come back as Failed instead.
+			// Merge's contract explicitly forbids ever returning NeedsManualResolution
+			// (that's a headless-only concept) - DiffPlexMergeEngine has no UI to resolve
+			// a conflict interactively, so a genuine conflict must come back as Failed
+			// instead. Merge() delegates straight to MergeHeadless(), which also means this
+			// genuine conflict writes a sidecar and calls FileOpener.Open on the interactive
+			// path too - stubbed here for the same reason as the headless fixtures above.
 			var dir = CreateTempDir();
+			var previousOpener = FileOpener.Open;
+			FileOpener.Open = _ => true;
 			try
 			{
 				var vanillaPath = Path.Combine(dir, "vanilla.ws");
@@ -375,6 +530,7 @@ namespace WitcherScriptMerger.Tests.Tools
 			}
 			finally
 			{
+				FileOpener.Open = previousOpener;
 				Directory.Delete(dir, true);
 			}
 		}

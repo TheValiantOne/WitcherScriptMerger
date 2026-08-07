@@ -6,9 +6,16 @@ that section doesn't: exactly what the process touches, and at what privilege le
 
 ## Minimal required permissions
 
-- **Standard user-level file I/O only.** No admin/elevated rights are needed to run any of
-  the four tools.
-- **Three filesystem roots, all ordinary user-writable locations:**
+- **Standard user-level file I/O — plus process spawning for conflict review.** No
+  admin/elevated rights are needed to run any of the four tools, but `merge_conflicts`
+  is not I/O-only: `DiffPlexMergeEngine.MergeHeadless` calls `Tools/FileOpener.Open`
+  (`Process.Start` with `UseShellExecute = true`) once per genuinely-conflicting file it
+  processes, launching whatever the OS has associated with that sidecar's file type —
+  there is no cap, batching, or opt-out on the *number* of conflicts merged in one call
+  (only `dryRun` suppresses the open entirely, see below). A `merge_conflicts` call with
+  no `relativePaths` filter against a mods folder with many genuine conflicts can
+  therefore open that many windows on the host desktop in one call.
+- **Four filesystem roots, all ordinary user-writable locations:**
   - The configured mods directory (`Paths.ModsDirectory`) and game directory
     (`Paths.GameDirectory`) — read for scanning conflicts and vanilla/mod source files,
     write for merged output (flat-file merges land inside the mods directory; a bundle
@@ -22,6 +29,12 @@ that section doesn't: exactly what the process touches, and at what privilege le
     executable itself lives in, regardless of what directory an MCP client launches it
     from — verified empirically (a client-supplied working directory had no effect;
     `MergeInventory.xml` always landed next to the executable).
+  - `Paths.DiffPlexConflictsDirectory` (`DiffPlexConflicts`, next to the executable for
+    the same `Environment.CurrentDirectory` reason as the previous bullet) — every
+    genuine conflict `merge_conflicts` processes writes a git/diff3-style conflict-marker
+    sidecar file here (see the root `CLAUDE.md`'s "Interactive vs. headless split"
+    section), even for a `dryRun` call. Nothing sweeps this directory automatically,
+    unlike `TempBundleContent`.
 - **`merge_conflicts`'s `relativePaths` and `orderOverrides` keys are validated against
   `Paths.ModsDirectory`** before any scan or merge runs (`WsmMcpTools.EnsureInScope` /
   `IsWithinModsDirectory`) — an entry that doesn't resolve inside that directory (absolute
