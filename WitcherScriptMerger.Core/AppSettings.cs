@@ -32,6 +32,50 @@ namespace WitcherScriptMerger
 			}
 		}
 
+		// Prefix applied to a setting's key to form the environment-variable name that
+		// overrides it (e.g. the "GameDirectory" setting is overridden by "WSM_GameDirectory").
+		// Generic by construction - covers every current <appSettings> key and any added
+		// later with zero per-key code changes, since it's just string concatenation, not
+		// an enumerated switch.
+		public const string EnvironmentVariablePrefix = "WSM_";
+
+		// Returns the environment-variable override for a settings key, or null if none is
+		// set. Static and side-effect-free (no CachedConfig/AppState touch at all) so it's
+		// safe to unit-test without constructing a live AppSettings instance - see
+		// WitcherScriptMerger.Tests/CLAUDE.md's "AppState.Settings-safety constraints" for
+		// why constructing one outside a real GUI/CLI/MCP entry point is unsafe (its
+		// constructor calls Environment.Exit(1) if it can't find a config file, which kills
+		// the whole dotnet test process rather than just failing one test).
+		public static string GetEnvironmentOverride(string key)
+		{
+			return Environment.GetEnvironmentVariable(EnvironmentVariablePrefix + key);
+		}
+
+		// Resolves a key's raw string value: an environment-variable override first, then
+		// falling through to the existing ConfigurationManager-backed lookup. Both Get and
+		// Get<T> route through this single place so an env-var-sourced value goes through
+		// the exact same downstream handling (Get<T>'s Parse-based conversion in particular)
+		// as one read from App.config - never a separate ad-hoc parser.
+		string GetRawValue(string key)
+		{
+			var envValue = GetEnvironmentOverride(key);
+			if (envValue != null)
+				return envValue;
+
+			if (CachedConfig.HasFile)
+				return CachedConfig.AppSettings.Settings[key].Value;
+
+			AppState.Notifier.ShowError($"Config file doesn't exist:\n\n{CachedConfig.FilePath}");
+			return null;
+		}
+
+		// Deliberately unaware of GetEnvironmentOverride: this still only ever writes to
+		// CachedConfig/App.config, same as before the env-var override existed. If a
+		// WSM_<key> override is active for a key this call targets, Get/Get<T> keep
+		// returning the override afterward regardless of what's written and Save()d here
+		// - a known, accepted asymmetry (an env var is meant to act as a caller-supplied
+		// override of whatever App.config/the GUI would otherwise produce), not a bug to
+		// paper over in this method.
 		public void Set(string key, object value)
 		{
 			try
@@ -48,16 +92,13 @@ namespace WitcherScriptMerger
 		{
 			try
 			{
-				if (CachedConfig.HasFile)
-				{
-					var valueString = CachedConfig.AppSettings.Settings[key].Value;
-					var parseMethod = typeof(T).GetMethod("Parse", new Type[] { typeof(string) });
-					var valueObject = parseMethod.Invoke(null, new object[] { valueString });
-					return (T)valueObject;
-				}
+				var valueString = GetRawValue(key);
+				if (valueString == null)
+					return default(T);
 
-				AppState.Notifier.ShowError($"Config file doesn't exist:\n\n{CachedConfig.FilePath}");
-				return default(T);
+				var parseMethod = typeof(T).GetMethod("Parse", new Type[] { typeof(string) });
+				var valueObject = parseMethod.Invoke(null, new object[] { valueString });
+				return (T)valueObject;
 			}
 			catch
 			{
@@ -69,11 +110,7 @@ namespace WitcherScriptMerger
 		{
 			try
 			{
-				if (CachedConfig.HasFile)
-					return CachedConfig.AppSettings.Settings[key].Value;
-
-				AppState.Notifier.ShowError($"Config file doesn't exist:\n\n{CachedConfig.FilePath}");
-				return string.Empty;
+				return GetRawValue(key) ?? string.Empty;
 			}
 			catch
 			{
