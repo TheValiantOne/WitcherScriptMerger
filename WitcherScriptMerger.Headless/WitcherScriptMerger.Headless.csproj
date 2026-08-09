@@ -5,6 +5,18 @@
     <TargetFramework>net10.0</TargetFramework>
     <RootNamespace>WitcherScriptMerger.Headless</RootNamespace>
     <AssemblyName>WitcherScriptMerger.Headless</AssemblyName>
+    <!-- Matches WitcherScriptMerger/Properties/AssemblyInfo.cs's hand-maintained
+         AssemblyVersion/AssemblyFileVersion ("0.6.2") - that project has
+         GenerateAssemblyInfo=false (see its CLAUDE.md), so it can't pick up this
+         property; this one has no such override, so GenerateAssemblyInfo (default true)
+         stamps AssemblyVersion/AssemblyFileVersion/AssemblyInformationalVersion from it. -->
+    <Version>0.6.2</Version>
+    <!-- The SDK default appends "+<git commit sha>" to AssemblyInformationalVersion.
+         Suppressed so VersionInfo.GetVersion() (Core) prints exactly this <Version>
+         value (or whatever -p:Version= a release build passes) - matching, not just
+         approximating, the WinForms host's plain AssemblyVersion string and a release
+         tag's own version text (e.g. tag "v0.6.2" -> "0.6.2"). -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <Nullable>disable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
     <CodeAnalysisRuleSet>..\WitcherScriptMerger\DeadCodeDetection.ruleset</CodeAnalysisRuleSet>

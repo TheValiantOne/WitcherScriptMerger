@@ -8,6 +8,7 @@ using System.Windows.Forms;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 using WitcherScriptMerger.Cli;
 using WitcherScriptMerger.Forms;
@@ -148,6 +149,17 @@ namespace WitcherScriptMerger
 		// one or more conflicts were skipped.
 		static int RunCli(string[] args)
 		{
+			// Checked before anything else touches AppState.Settings/Paths -
+			// AppSettings's constructor calls Environment.Exit(1) when it can't find a
+			// config file (see Core's CLAUDE.md), so a freshly-extracted publish dir with
+			// no App.config/<AssemblyName>.dll.config copied beside the exe yet would
+			// otherwise kill the process before "--version" ever got to print anything.
+			if (args[0] == "--version")
+			{
+				Console.WriteLine(VersionInfo.GetVersion(typeof(Program).Assembly));
+				return 0;
+			}
+
 			Environment.CurrentDirectory = AppContext.BaseDirectory;
 
 			if (!Settings.HasConfigFile)
@@ -161,7 +173,7 @@ namespace WitcherScriptMerger
 
 			if (args[0] != "merge")
 			{
-				Console.Error.WriteLine($"Unknown command '{args[0]}'. Supported commands: merge, mcp");
+				Console.Error.WriteLine($"Unknown command '{args[0]}'. Supported commands: merge, mcp, --version");
 				return 1;
 			}
 
@@ -255,8 +267,17 @@ namespace WitcherScriptMerger
 			// the calling assembly, which would silently register zero tools (server
 			// starts, `initialize` succeeds, `tools/list` returns an empty array) if
 			// left as-is. Pass the Core assembly explicitly.
+			//
+			// ServerInfo is the SDK's standard mechanism for identifying this server (name
+			// + version) to a connecting client during the initialize handshake - not a
+			// custom side-channel. "WitcherScriptMerger" distinguishes this (WinForms)
+			// host from WitcherScriptMerger.Headless's own MCP server in a client's logs.
 			builder.Services
-				.AddMcpServer()
+				.AddMcpServer(options => options.ServerInfo = new Implementation
+				{
+					Name = "WitcherScriptMerger",
+					Version = VersionInfo.GetVersion(typeof(Program).Assembly),
+				})
 				.WithStdioServerTransport()
 				.WithToolsFromAssembly(typeof(WsmMcpTools).Assembly);
 

@@ -132,10 +132,18 @@ publish/
 # Publish Web Output
 *.[Pp]ublish.xml
 *.azurePubxml
-# TODO: Comment the next line if you want to checkin your web deploy settings 
+# TODO: Comment the next line if you want to checkin your web deploy settings
 # but database connection strings (with potential passwords) will be unencrypted
 *.pubxml
 *.publishproj
+
+# ...except this repo's own release publish profiles, checked in deliberately: they
+# hold no credentials (just RuntimeIdentifier/SelfContained/PublishSingleFile), and
+# .github/workflows/release.yml depends on them being present via `dotnet publish
+# -p:PublishProfile=<name>`. See WitcherScriptMerger/CLAUDE.md and
+# WitcherScriptMerger.Headless/CLAUDE.md's "Publish"/"Publishing" sections.
+!WitcherScriptMerger/Properties/PublishProfiles/*.pubxml
+!WitcherScriptMerger.Headless/Properties/PublishProfiles/*.pubxml
 
 # NuGet Packages
 *.nupkg

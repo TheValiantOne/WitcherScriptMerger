@@ -5,6 +5,7 @@ using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using ModelContextProtocol.Protocol;
 using WitcherScriptMerger.Cli;
 using WitcherScriptMerger.Inventory;
 using WitcherScriptMerger.LoadOrder;
@@ -27,6 +28,19 @@ namespace WitcherScriptMerger.Headless
 	{
 		static int Main(string[] args)
 		{
+			// Checked before anything else, including the CurrentDirectory reassignment
+			// below - mirrors WitcherScriptMerger/Program.cs's RunCli doing the same
+			// ahead of its own config-file check. AppState.Settings's construction (first
+			// touched inside RunMerge/RunMcp) calls Environment.Exit(1) when it can't find
+			// a config file (see Core's CLAUDE.md), so a freshly-extracted publish dir
+			// with no App.config/<AssemblyName>.dll.config copied beside the exe yet must
+			// never reach that path just to answer "--version".
+			if (args.Length > 0 && args[0] == "--version")
+			{
+				Console.WriteLine(VersionInfo.GetVersion(typeof(Program).Assembly));
+				return 0;
+			}
+
 			// Several Core paths are relative to Environment.CurrentDirectory
 			// (Paths.MergedBundleContentAbsolute's field initializer, Paths.Inventory,
 			// Paths.DiffPlexConflictsDirectory, Paths.TempBundleContent) - must be set
@@ -56,7 +70,7 @@ namespace WitcherScriptMerger.Headless
 			if (args[0] == "merge")
 				return RunMerge(args);
 
-			Console.Error.WriteLine($"Unknown command '{args[0]}'. Supported commands: merge, mcp");
+			Console.Error.WriteLine($"Unknown command '{args[0]}'. Supported commands: merge, mcp, --version");
 			PrintUsage();
 			return 1;
 		}
@@ -68,6 +82,7 @@ namespace WitcherScriptMerger.Headless
 			Console.Error.WriteLine("Usage:");
 			Console.Error.WriteLine("  WitcherScriptMerger.Headless merge [--order-file <path.json>]");
 			Console.Error.WriteLine("  WitcherScriptMerger.Headless mcp");
+			Console.Error.WriteLine("  WitcherScriptMerger.Headless --version");
 			Console.Error.WriteLine();
 			Console.Error.WriteLine("Supports flat-file (.ws/.xml) conflicts only - bundle-content conflicts");
 			Console.Error.WriteLine("require QuickBMS/wcc_lite, which this host doesn't bundle. See CLAUDE.md.");
@@ -195,8 +210,17 @@ namespace WitcherScriptMerger.Headless
 			// `initialize` succeeds, `tools/list` returns an empty array) if left as-is.
 			// Pass the Core assembly explicitly - same fix WitcherScriptMerger/Program.cs
 			// needed for the identical reason.
+			//
+			// ServerInfo is the SDK's standard mechanism for identifying this server (name
+			// + version) to a connecting client during the initialize handshake - not a
+			// custom side-channel. "WitcherScriptMerger.Headless" distinguishes this host
+			// from the WinForms host's own MCP server in a client's logs.
 			builder.Services
-				.AddMcpServer()
+				.AddMcpServer(options => options.ServerInfo = new Implementation
+				{
+					Name = "WitcherScriptMerger.Headless",
+					Version = VersionInfo.GetVersion(typeof(Program).Assembly),
+				})
 				.WithStdioServerTransport()
 				.WithToolsFromAssembly(typeof(WsmMcpTools).Assembly);
 
