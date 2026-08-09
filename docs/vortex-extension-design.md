@@ -1,50 +1,82 @@
 # Vortex Extension Design (Unit 4)
 
-**Note (post-KDiff3-retirement):** this document describes WSM's architecture as of
-its own writing, when KDiff3 was still a required on-disk dependency alongside
-QuickBMS/wcc_lite. KDiff3 has since been retired in favor of an in-process,
-external-binary-free merge engine — see `docs/decisions/kdiff3-retirement.md`. This
-materially *simplifies* several points below that treated KDiff3/QuickBMS/wcc_lite as a
-combined packaging problem (e.g. §2.2, the "KDiff3/QuickBMS/wcc_lite are a separate
-problem" point) — only QuickBMS/wcc_lite remain. Not otherwise updated inline below;
-read the KDiff3-specific mentions that follow as historical context, not current fact.
+**Note (post-KDiff3-retirement, and refreshed since):** this document originally
+described WSM's architecture as of its own first writing, when KDiff3 was still a
+required on-disk dependency alongside QuickBMS/wcc_lite, no self-contained publish
+existed, and there was no Linux-capable host. All three have since changed: KDiff3 was
+retired in favor of an in-process, external-binary-free merge engine (see
+`docs/decisions/kdiff3-retirement.md`); a self-contained single-file publish convention
+now exists for both hosts (`dotnet publish -r <rid> --self-contained
+-p:PublishSingleFile=true`, documented in each host's own `CLAUDE.md`); and
+`WitcherScriptMerger.Headless` (`net10.0`, no GUI, CLI+MCP only) now exists and is
+verified against a real Linux runtime. §2.2 below has been updated to treat these as
+current fact rather than depended-upon-but-unbuilt. Only QuickBMS/wcc_lite remain
+outside WSM's own source control (see "External tool dependencies" in the root
+`CLAUDE.md`); read any KDiff3-specific mentions below as historical context, not
+current fact.
 
-**Status: design document only.** Nothing in this file is implemented. There is no
-TypeScript/Node scaffolding anywhere in this repository, and this unit does not add
-any — that work is explicitly deferred to a later, separate implementation batch. This
-document exists so that future work has a starting point instead of a blank page.
+**Status: design document only, now with settled decisions.** No TypeScript/Node
+scaffolding exists in this repository yet, and this refresh does not add any — actual
+implementation remains a separate, later batch. What *has* changed since the first
+draft: a planning effort (research, an advisor consult, and explicit owner decisions)
+has settled several structural questions that were previously open, most importantly
+**scope** and **location** (both below). This document is still the starting point for
+that later implementation, updated to reflect what's now decided rather than left as
+open options.
 
-**Scope**: how a Vortex extension could drive WitcherScriptMerger's (WSM's) existing
-CLI and MCP interfaces. It does not propose any new WSM-side functionality beyond what
-`CLAUDE.md` already documents as done today. §2.2 below also depends on two *sibling*
-units of this same re-architecture batch (a self-contained single-file publish, and a
-headless-only build) — those are **not** yet reflected in `CLAUDE.md` as of this
-writing (confirmed by reading it in full; `HANDOFF.md` is gitignored and wasn't present
-in this checkout to check), because they haven't landed yet. They come from this unit's
-own task brief, not from repo documentation, and are flagged as depended-upon-but-unbuilt
-everywhere they're used below, not treated as already-true facts.
+**Scope (decided):** a **companion extension** to Vortex's existing, actively-maintained
+built-in Witcher 3 game extension (`game-witcher3` — see §0 for its current location).
+The new extension will **not** call `context.registerGame` and will **not** reimplement
+game registration, mod deployment, load-order sorting, or config-matrix merging — all of
+which `game-witcher3` already does correctly. It only replaces/supersedes the
+script-merger-specific slice: tool discovery/invocation, config editing, conflict
+notification, and merge history. Every registration this extension adds gates on
+`selectors.activeGameId(state) === 'witcher3'` being Vortex's active game, exactly like
+`game-witcher3`'s own registrations do.
+
+**Location (decided):** the extension's TypeScript/Node code will live in a new
+top-level `vortex-extension/` folder in *this* repo — not a separate sibling repo — kept
+fully outside `WitcherScriptMerger.sln`, `dotnet build`, and `dotnet format`'s reach.
+See §1 for what that means for tooling boundaries.
+
+**What remains open**: everything not covered by the two decisions above — see §6 for
+the current state of each open question, several of which are now resolved by
+WSM-side and Vortex-side facts uncovered since the first draft, and several of which
+are genuinely still open.
 
 ---
 
 ## 0. Context: Vortex already has a Script Merger integration today
 
 Before designing anything new, it's worth being precise about what already exists,
-because a new extension has to coexist with it, not pretend it doesn't exist.
+because a new extension has to coexist with it, not pretend it doesn't exist — and,
+per the scope decision above, *deliberately builds alongside it rather than replacing
+it*.
 
-Vortex's official Witcher 3 game extension
-([`Nexus-Mods/vortex-games`, `game-witcher3/index.js`](https://github.com/Nexus-Mods/vortex-games/blob/master/game-witcher3/index.js))
-already integrates with a Script Merger build today. The following is verified
-directly against that extension's actual source
-(`gh api repos/Nexus-Mods/vortex-games/contents/game-witcher3/index.js`), not inferred
-from a summary:
+**Citation correction from the first draft**: Vortex's official Witcher 3 game
+extension no longer lives where this document originally cited it.
+`Nexus-Mods/vortex-games` (the repo the first draft cited, `game-witcher3/index.js`) is
+now **archived** (confirmed via `gh api repos/Nexus-Mods/vortex-games` →
+`"archived": true`). The actively-maintained source now lives in the
+`Nexus-Mods/Vortex` monorepo, at
+[`extensions/games/game-witcher3/src/`](https://github.com/Nexus-Mods/Vortex/tree/master/extensions/games/game-witcher3/src) —
+split across several files instead of one (`index.ts`, `scriptmerger.ts`,
+`mergeInventoryParsing.ts`, `mergeBackup.ts`, `eventHandlers.ts`, `modTypes.ts`, and
+more). The following is re-verified directly against that current source (fetched via
+`gh api repos/Nexus-Mods/Vortex/contents/...`), not carried over from the stale
+citation:
 
-- It registers Script Merger as a discovered **tool** (`registerTool`/`addDiscoveredTool`,
-  ID `W3ScriptMerger`), with `requiredFiles: ['WitcherScriptMerger.exe']`, and can
-  **auto-download** a build from GitHub releases at
-  `https://api.github.com/repos/IDCs/WitcherScriptMerger` — a *different* fork from the
-  one this repo forked from (`AnotherSymbiote/WitcherScriptMerger`; see this repo's
+- It registers Script Merger as a discovered **tool** via `addDiscoveredTool`
+  (`scriptmerger.ts`), ID `W3ScriptMerger`, with `requiredFiles:
+  ['WitcherScriptMerger.exe']`, and can **auto-download** a build from GitHub releases
+  at `https://api.github.com/repos/IDCs/WitcherScriptMerger` — a *different* fork from
+  the one this repo forked from (`AnotherSymbiote/WitcherScriptMerger`; see this repo's
   `CLAUDE.md` "Project overview"). It prompts the user to run it, with consent, when
-  script conflicts are detected.
+  script conflicts are detected. (There is no `registerTool` API in `vortex-api` at
+  all — see §1's correction — so `addDiscoveredTool` is the only mechanism either
+  extension can use, and the two can register distinctly-branded tool IDs without
+  fighting over the same one; there's no API to hide or disable another extension's
+  existing tool registration either way.)
 - **Running it launches the GUI, not a headless merge.** `runScriptMerger()` calls
   `api.runExecutable(tool.path, [], { suggestDeploy: true })` — an *empty* argument
   list. Per this repo's own `Program.cs` (`args.Length > 0` is what selects the
@@ -53,21 +85,23 @@ from a summary:
   also a different codebase from this repo, and predates this repo's CLI/MCP additions
   (see this repo's own commit history) — it likely has no headless mode to invoke even
   if Vortex wanted one. So Vortex's existing flow today is "launch the GUI, let the
-  user drive KDiff3 and merge conflicts by hand, then read the result back
-  afterward" — **not** a precedent for unattended/headless invocation. That distinction
-  matters directly for §3 below.
+  user drive merge conflicts by hand, then read the result back afterward" — **not** a
+  precedent for unattended/headless invocation. That distinction matters directly for
+  §3 below.
 - It reads and rewrites WSM's own config file at the OS level: `setMergerConfig()`
   parses `WitcherScriptMerger.exe.config` as XML and overwrites the `GameDirectory`,
   `VanillaScriptsDirectory`, and `ModsDirectory` `<add key="..." value="..."/>` entries
   in its `<appSettings>` block with paths derived from Vortex's own knowledge of the
   game install, then writes the file back — called both at initial tool setup and
-  before running the merger. **This is exactly the "hand-edit the deployed
-  `.exe.config`" mechanism §4.1 below proposes** — it isn't a novel idea invented for
-  this design, it's an already-shipping pattern in Vortex's own codebase, which is
-  reassuring precedent rather than untested ground.
-- `getMergeInventory()` parses `MergeInventory.xml` directly (`<MergedModName>`,
-  `<IncludedMod>` elements) — the same file this repo's `Inventory/MergeInventory.cs`
-  owns via `XmlSerializer`.
+  before running the merger. **This is the same fragile, race-prone, unlocked pattern
+  §4.1 below used to propose for this extension** — it isn't a novel idea, it's an
+  already-shipping pattern in `game-witcher3`'s own codebase, which is reassuring
+  precedent that the *approach* works, but §4.1 now recommends a first-class
+  alternative for this extension instead of copying the hand-edit, once that
+  alternative exists WSM-side.
+- `getMergeInventory()`/`mergeInventoryParsing.ts` parses `MergeInventory.xml` directly
+  (`<MergedModName>`, `<IncludedMod>` elements) — the same file this repo's
+  `Inventory/MergeInventory.cs` owns via `XmlSerializer`.
 - It expects the merged-output mod folder to be named with a `mod0000_`-style locked
   prefix (`LOCKED_PREFIX = "mod0000_"` in the source) so Vortex pins it to load-order
   slot 1 (ahead of everything it merges). WSM's own default `MergedModName` in
@@ -84,17 +118,37 @@ from a summary:
   both prompt the user," it's "installing a Collection through the existing
   integration can overwrite this extension's own prior merge work if the user clicks
   through the warning without realizing what it means for a WSM-based workflow."
+- **A second, distinct coexistence hazard, found this round**: `eventHandlers.ts`
+  wires `context.api.events.on("profile-will-change", onProfileWillChange(context.api))`,
+  and `onProfileWillChange` (also in `eventHandlers.ts`) calls into `mergeBackup.ts`'s
+  exported `storeToProfile(api, previousProfileId)` then `restoreFromProfile(api,
+  newProfileId)` — backing up and restoring merged-script content **per Vortex
+  profile** on every profile switch. `MergeInventory.xml` has no profile concept at
+  all; it's one global file, unaware Vortex profiles exist. This is a second, distinct
+  hazard from the Collections-import one above — it fires on ordinary profile
+  switching, not just on installing a collection — and a later implementation unit
+  will need an explicit answer for it (see §6, Open Question 1).
+- Its `witcher3dlc` mod type (`modTypes.ts`/`index.ts`, `registerModType("witcher3dlc",
+  ...)`) deploys mods Vortex itself manages directly into `<GameDir>\DLC\<modname>\`.
+  WSM's own scanner never looks there — `FileIndex/ModFileIndex.cs`'s `BuildAsync`
+  enumerates only `Directory.GetDirectories(Paths.ModsDirectory, "mod*", ...)`, never
+  `Paths.DlcDirectory` — so conflicts *between* mods Vortex deploys as `witcher3dlc` are
+  invisible to WSM today. That's a real scope boundary, addressed directly in §2.2.
 
-This means a brand-new Vortex extension isn't filling a total void; it's a second,
-more capable integration point that has to decide its relationship to the built-in one
-(see the open questions in §6). It also means the config-file-editing and
-load-order-locking "hard problems" already have a proven answer in Vortex's own
-codebase (leaned on directly in §4 below) — but headless/unattended invocation of WSM
-specifically does **not** have an existing precedent in Vortex's codebase; that part
-is genuinely new ground for §3's recommendation to reckon with honestly.
+This means a brand-new Vortex extension isn't filling a total void; it's a companion
+integration point that has to coexist with the built-in one on purpose (see the open
+questions in §6, most of which this document can now partially answer). It also means
+the config-file-editing and load-order-locking "hard problems" already have a proven
+answer in `game-witcher3`'s own codebase (leaned on directly in §4 below) — but
+headless/unattended invocation of WSM specifically does **not** have an existing
+precedent in Vortex's codebase; that part is genuinely new ground for §3's
+recommendation to reckon with honestly.
 
-*(Sources: [`game-witcher3/index.js`](https://github.com/Nexus-Mods/vortex-games/blob/master/game-witcher3/index.js),
-fetched and read directly via `gh api`;
+*(Sources: [`Nexus-Mods/Vortex`, `extensions/games/game-witcher3/src/`](https://github.com/Nexus-Mods/Vortex/tree/master/extensions/games/game-witcher3/src)
+(`index.ts`, `scriptmerger.ts`, `mergeInventoryParsing.ts`, `mergeBackup.ts`,
+`eventHandlers.ts`, `modTypes.ts`), fetched and read directly via `gh api`;
+[`Nexus-Mods/vortex-games`](https://github.com/Nexus-Mods/vortex-games) confirmed
+archived via `gh api repos/Nexus-Mods/vortex-games`;
 [Nexus Mods wiki, "Modding The Witcher 3 with Vortex"](https://wiki.nexusmods.com/index.php/Modding_The_Witcher_3_with_Vortex);
 [Vortex Wiki, "Tool Setup: Witcher 3 Script Merger"](https://wiki.nexusmods.com/index.php/Tool_Setup:_Witcher_3_Script_Merger).)*
 
@@ -104,23 +158,28 @@ fetched and read directly via `gh api`;
 
 Vortex extensions are **TypeScript/Node**, built against the
 [`vortex-api`](https://github.com/Nexus-Mods/vortex-api) package and Vortex's own
-extension conventions (an `info.json` manifest, an entry point exporting a single
-`activate(context)` function, `context.registerAction`/`registerTool`/etc.). That is a
+extension conventions: an `info.json` manifest, an entry point exporting a single
+**`init(context: IExtensionContext)`** function as the module's default export (the
+first draft called this `activate(context)` — corrected here against the Vortex wiki's
+own "General Introduction to Vortex extensions" page, re-fetched this round: `function
+init(context) {...}; exports.default = init;` is the documented convention).
+`context.registerAction`/`registerModType`/etc. remain as before, but **there is no
+`context.registerTool` API** — re-checked directly against `vortex-api`'s published
+`lib/api.d.ts` typings, which define no such method. Tool discovery/registration goes
+through `actions.addDiscoveredTool(gameId, toolId, toolDetails: IDiscoveredTool,
+isCustom: boolean)`, dispatched via `context.api.store.dispatch(...)` — exactly how
+`game-witcher3` registers `W3ScriptMerger` today (§0), and it works identically for a
+companion extension registering a distinctly-branded, different tool ID. This is a
 completely different toolchain from this repo's .NET/WinForms solution — there is no
 sensible way to fold it into `WitcherScriptMerger.sln`.
 
-Consequence for repo layout: **this must live in a separate package/repo**, not a
-folder inside `WitcherScriptMerger/`. Candidate options (to be decided when this unit
-is actually implemented, not now):
-
-- A new sibling repo, e.g. `witcherscriptmerger-vortex`, with its own `package.json`,
-  its own CI, its own release cadence tied to (but independent of) WSM's own releases.
-- A `vortex-extension/` top-level folder in *this* repo, kept fully outside the `.sln`
-  and `dotnet build`'s reach, if the owner prefers single-repo convenience over clean
-  separation.
-
-Either way: no Node tooling, `package.json`, or `node_modules` should ever need to
-appear anywhere `dotnet build WitcherScriptMerger.sln` looks.
+**Consequence for repo layout (decided):** the extension's code lives in a new
+top-level `vortex-extension/` folder in *this* repo — not a separate sibling repo, and
+not one of two "candidate options" as the first draft framed it. It stays fully outside
+`WitcherScriptMerger.sln`, `dotnet build`, and `dotnet format`'s reach: no Node tooling,
+`package.json`, or `node_modules` should ever need to appear anywhere `dotnet build
+WitcherScriptMerger.sln` looks, and conversely nothing under `vortex-extension/` should
+need `dotnet` for its own build/lint/test cycle.
 
 ---
 
@@ -137,52 +196,70 @@ extension existing at all.
 ### 2.2 Locating the WSM CLI binary
 
 WSM is not bundled with Vortex, and the extension needs a WSM executable capable of
-running `merge` and/or `mcp` mode (see §3). Today, this means the full Windows build —
-`WitcherScriptMerger.exe`, which still requires KDiff3/QuickBMS/wcc_lite on disk per
-`CLAUDE.md`'s "External tool dependencies" — since no unit in this batch has shipped a
-KDiff3/QuickBMS/wcc_lite-free build yet.
+running `merge` and/or `mcp` mode (see §3). Two artifacts the first draft flagged as
+"depended-upon-but-unbuilt" are now real, current fact rather than assumptions:
 
-Two other units in this same re-architecture batch are directly relevant here, and
-this design explicitly depends on them without assuming either is done:
-
-- A **self-contained single-file publish profile** for WSM (full GUI+CLI+MCP build).
+- A **self-contained single-file publish convention** exists for both hosts —
+  `dotnet publish <project>.csproj -r <rid> --self-contained
+  -p:PublishSingleFile=true -c Release`, documented in each host's own `CLAUDE.md`
+  (`WitcherScriptMerger/CLAUDE.md`: `win-x64` only, full GUI+CLI+MCP;
+  `WitcherScriptMerger.Headless/CLAUDE.md`: `win-x64` and `linux-x64`, CLI+MCP only).
   This is what the extension would most plausibly bundle or download — a single `.exe`
   with the .NET runtime baked in, no separate .NET install required on the user's
   machine.
-- A **lighter-weight headless-only build** (CLI+MCP, no WinForms/GUI), explicitly
-  called out as a candidate for eventual Linux support. Vortex itself is Windows-only
-  today, and Nexus Mods has publicly committed to native SteamOS support for Vortex,
-  expected to land later in 2026 — so a Linux-capable WSM CLI host is *plausibly*
-  relevant to this extension eventually, not purely speculative. That said, don't
-  over-read this as an established requirement: KDiff3/QuickBMS/wcc_lite would still
-  need Linux-native builds or a compatibility layer for a truly native Linux merge
-  pipeline to work at all, and a simpler alternative might make a dedicated Linux WSM
-  build unnecessary in the near term — a Linux/SteamOS Vortex could plausibly just keep
-  shelling out to the existing Windows WSM build the same way SteamOS already runs
-  unmodified Windows games via Proton, the same compatibility layer Witcher 3 itself
-  would already be running under on that platform. Which path is actually right isn't
-  something this document can resolve — flagged as an open question in §6 rather than
-  assumed here.
+- **`WitcherScriptMerger.Headless`** (`net10.0`, no WinForms reference, CLI+MCP only)
+  now exists and is verified against a real Linux runtime (WSL2, not just a
+  cross-compile check — see that project's own `CLAUDE.md`). It gates only on
+  `Paths.ValidateTextMergeDependencies()`, not the combined QuickBMS+wcc_lite check the
+  WinForms host requires — so it can merge flat-file (`.ws`/`.xml`) conflicts with
+  **no external binaries at all**, on either Windows or Linux; bundle-content conflicts
+  still need QuickBMS/wcc_lite (see below) and degrade gracefully (one warning, no
+  crash) when they're absent. Vortex itself is Windows-only today, but Nexus Mods has
+  publicly committed to native SteamOS support for Vortex, expected later in 2026 — a
+  Linux-capable WSM CLI host is now a real, exercised option for that future, not
+  speculative. Whether a future Linux/SteamOS Vortex should actually drive this Linux
+  build natively, versus simply keep shelling out to the existing Windows build under
+  the same Proton compatibility layer Witcher 3 itself would already be running under,
+  remains genuinely undecided — see Open Question 8 in §6, unchanged by anything above.
 
-Setup flow, once those artifacts exist:
+**v1 bundle-content scope (decided):** full support for **vanilla-baseline matching** —
+two ordinary mods altering official DLC/expansion bundle content (e.g. Blood & Wine).
+This is exactly the shape the recently-merged case-insensitive DLC-folder-regex fix
+already handles (`FileMerger.IsVanillaDlcBundleFolder` /
+`VanillaDlcBundleFolderPattern`, documented in `WitcherScriptMerger.Core/CLAUDE.md`'s
+"Vortex-fork parity fixes" section), and a parallel unit is making that regex
+config-extensible so future DLC (the announced "Songs of the Past" expansion) doesn't
+need a code change. **Explicitly not in scope for this round**: detecting conflicts
+between mods Vortex itself deploys via its own `witcher3dlc` mod type into
+`<GameDir>\DLC\<modname>\` (§0) — WSM's scanner only ever looks at
+`Paths.ModsDirectory` ("mod*" folders) as a mod-content scan root, never
+`Paths.DlcDirectory`, and extending that is a separate, larger change than this design
+covers.
+
+Setup flow:
 
 1. On first activation (or on first use of a script-merge action), the extension
    checks for a cached WSM binary in its own extension-private storage.
 2. If absent, it either (a) unpacks a bundled copy shipped inside the extension
    package itself, or (b) downloads the self-contained publish artifact from a WSM
-   GitHub release, similar to how `game-witcher3/index.js` already downloads the
+   GitHub release, similar to how `game-witcher3` already downloads the
    `IDCs/WitcherScriptMerger` fork today (see §0) — verify via checksum before trusting
-   it.
-3. **KDiff3/QuickBMS/wcc_lite are a separate problem the extension cannot solve by
-   bundling WSM alone.** Per `CLAUDE.md`, none of the three are in WSM's own source
-   control — QuickBMS and wcc_lite specifically because their licensing is unresolved,
-   and that constraint doesn't go away just because a different project is doing the
-   downloading. The self-contained publish profile does not change this: it packages
-   WSM's own managed code, not these three external binaries. The extension has to
-   either point at an existing local install of these tools (e.g., detect the
+   it. Once the release-workflow/`--version` work described in §6 (Open Question 4)
+   lands, this step can also version-check the download against a minimum supported
+   WSM release rather than trusting whatever a release tag happens to contain.
+3. **QuickBMS/wcc_lite are a separate problem the extension cannot solve by bundling
+   WSM alone.** Per the root `CLAUDE.md`, neither is in WSM's own source control —
+   their licensing is unresolved, and that constraint doesn't go away just because a
+   different project is doing the downloading. The self-contained publish convention
+   does not change this: it packages WSM's own managed code, not these two external
+   binaries. If the extension only needs flat-file merging (the v1 bundle-content scope
+   above doesn't require QuickBMS/wcc_lite at all on the Headless host), this may not
+   block a v1 at all; for bundle-content conflicts, the extension has to either point
+   at an existing local install of these tools (e.g., detect the
    `IDCs/WitcherScriptMerger` fork Vortex may have already downloaded per §0, and
    reuse its `Tools\` subfolder) or prompt the user to source them the same way WSM's
-   own README does. This should not be silently glossed over — see §6.
+   own README does. This should not be silently glossed over — see §6, Open Question 2,
+   still genuinely open.
 4. The extension writes the resolved WSM binary path into its own settings, and
    surfaces it (read-only or editable) in Vortex's per-game settings panel so the user
    can override it if they already have a WSM install they prefer.
@@ -191,7 +268,11 @@ Setup flow, once those artifacts exist:
 
 ## 3. Invocation model
 
-WSM exposes two non-GUI surfaces today (`CLAUDE.md` "CLI mode" / "MCP mode"):
+WSM exposes two non-GUI surfaces today, documented in each host's own `CLAUDE.md`
+(`WitcherScriptMerger/CLAUDE.md`'s "CLI mode (this host)" / "MCP mode (this host)"
+sections; `WitcherScriptMerger.Headless/CLAUDE.md` mirrors the same CLI verb and MCP
+tool surface, differing only in how strictly it gates on QuickBMS/wcc_lite being
+present):
 
 | | CLI (`merge [--order-file <path.json>]`) | MCP (`mcp`, stdio JSON-RPC) |
 |---|---|---|
@@ -230,7 +311,8 @@ Reasoning:
   "has history UX."
 - What CLI-only *cannot* do is a genuine **pre-merge conflict preview** — "here's what
   would change, review it, then confirm" — because there is no CLI verb that only
-  scans without merging, and nothing in `CLAUDE.md` suggests one is planned. Building
+  scans without merging, and nothing in `WitcherScriptMerger/CLAUDE.md` suggests one is
+  planned. Building
   that preview by having the extension re-implement WSM's own conflict-scanning logic
   (walking mods, comparing hashes) would duplicate `FileIndex/ModFileIndex.cs` outside
   this repo — exactly the kind of "invent new capability" this design is supposed to
@@ -240,18 +322,33 @@ Reasoning:
   (`orderOverrides`) as first-class, structured input/output, versus the CLI's
   all-conflicts-every-time behavior and free-text console output. A "merge just this
   one file, in this order" UX action needs MCP.
+- **New finding this round, confirming (not just assuming) that MCP needs its own
+  transport path**: `vortex-api`'s published `lib/api.d.ts` typings show
+  `api.runExecutable(executable: string, args: string[], options: IRunOptions) =>
+  Promise<void>` has no stdio/pipe access whatsoever — `IRunOptions` exposes only
+  `cwd`, `env`, `suggestDeploy`, `shell`, `detach`, `expectSuccess`, `onSpawned`,
+  `onExit`. That's fine for the one-shot `merge` CLI verb (fire, await the promise,
+  then diff `MergeInventory.xml` before/after, exactly the v1 flow this section
+  recommends) but it categorically **cannot** carry MCP's JSON-RPC stdio frames. An MCP
+  client has no choice but to bypass `vortex-api` for that specific call and use raw
+  Node `child_process.spawn(exe, ['mcp'], {stdio: 'pipe'})` directly, hand-rolling the
+  JSON-RPC framing itself.
 
 So: ship the CLI-driven "spawn `merge`, wait, refresh the mod list from
 `MergeInventory.xml`" flow first, as the low-risk default for the core "resolve script
-conflicts" action. Treat MCP as a v2 enhancement that unlocks conflict preview,
-per-file merge actions, and a live dependency/status check (`get_status`) surfaced in
-Vortex's UI — gated on someone actually writing (or importing) a TypeScript MCP client
-and deciding on the child-process lifecycle model (spawn per action-and-tear-down vs.
-spawn-once-per-session; `CLAUDE.md` notes every MCP tool call already re-scans and
-re-loads from scratch server-side, so a long-lived process mainly saves the stdio
-handshake, not server-side work — a "spawn per user-initiated workflow, tear down when
-the panel closes" middle ground is probably the sweet spot, not a permanent
-session-long daemon).
+conflicts" action, built entirely on `api.runExecutable` — no bypass of `vortex-api`
+needed for v1. Treat MCP as a v2 enhancement that unlocks conflict preview, per-file
+merge actions, and a live dependency/status check (`get_status`) surfaced in Vortex's
+UI, built on a hand-rolled `child_process.spawn` MCP client per the finding above.
+**Process lifecycle for that client (resolves Open Question 6 in §6):** spawn per
+user-initiated workflow, tear down when the relevant panel/dashlet closes — not a
+permanent session-long daemon, and not spawn-per-tool-call either. Every MCP tool call
+already re-scans and re-loads from scratch server-side (see
+`WitcherScriptMerger.Core/Mcp/CLAUDE.md`), so a longer-lived process mainly saves the
+stdio handshake cost across a burst of related calls (e.g. `scan_conflicts` then
+`merge_conflicts` from the same review session), not server-side work — which is
+exactly what a per-workflow process buys without paying for a daemon's crash/restart
+and orphaned-process-cleanup complexity.
 
 ---
 
@@ -273,27 +370,45 @@ into the real game mods folder, not some Vortex-private staging area, for a
 non-symlink-deployment game like this), **no translation of Vortex's internal mod
 state into a separate WSM-readable format should be necessary** — WSM can scan the
 same physical folder Vortex deploys into, exactly as it does today when a human
-installs mods by hand. What the extension *does* need to do is make sure the deployed
+installs mods by hand. What the extension *does* need to do is make sure the invoked
 WSM instance's `GameDirectory`/`ModsDirectory` settings actually point at the game
-install Vortex is managing. Since WSM has no CLI/MCP flag for this, the only way to do
-that today is for the extension to write those two keys directly into the deployed
-`WitcherScriptMerger.exe.config` XML file before invoking WSM (Vortex already knows the
-exact game install path — that's central to what a game extension does). **This isn't
-a novel proposal** — it's exactly what Vortex's existing `setMergerConfig()` already
-does in production (§0), down to the same file name and the same `GameDirectory`/
-`VanillaScriptsDirectory`/`ModsDirectory` keys, which is good evidence the approach
-works in practice, not just in theory.
+install Vortex is managing (Vortex already knows the exact game install path — that's
+central to what a game extension does).
 
-That precedent doesn't retire the concurrency question, though: `AppSettings.cs`
-caches its `Configuration` object and only persists on an explicit `Save()`, and
-`CLAUDE.md`'s MCP section already flags a documented risk of a concurrently-running
-GUI WSM instance clobbering `MergeInventory.xml`. The same class of race applies here —
-if the extension hand-edits `WitcherScriptMerger.exe.config` while a WSM process (GUI
-or CLI/MCP) is already running against the old config, results are undefined. Vortex's
-own `setMergerConfig()` doesn't appear to guard against this either (it's a
-best-effort file write with a bare try/catch), so this is an inherited risk, not a
-solved one — the extension should still only edit the config file when it's about to
-spawn a fresh WSM process, never while one is already running.
+**Recommended mechanism (resolves Open Question 5 in §6, supersedes this section's
+original proposal):** a generic `WSM_<KeyName>` environment-variable override for any
+`App.config` `<appSettings>` key, landing alongside this doc's own refresh in a
+parallel WSM-side unit — `AppSettings.Get`/`Get<T>` will check the corresponding env
+var (e.g. `WSM_GameDirectory`, `WSM_ModsDirectory`, `WSM_MergedModName`) before falling
+through to `ConfigurationManager`. Since the extension controls the environment it
+spawns a child process into (`IRunOptions.env`, per §3's typings review, or plain
+`child_process.spawn`'s own `env` option for the MCP path), it can set these per-launch
+without touching any file on disk at all — no shared mutable state, no write-then-race
+window. This is a first-class, supported alternative for every caller (this extension,
+and eventually `game-witcher3` itself), not something this extension has to
+independently reimplement.
+
+The original proposal — writing `GameDirectory`/`ModsDirectory` keys directly into the
+deployed `WitcherScriptMerger.exe.config` XML file before invoking WSM — is not a novel
+idea invented for this design; it's exactly what `game-witcher3`'s existing
+`setMergerConfig()` already does in production (§0), down to the same file name and the
+same `GameDirectory`/`VanillaScriptsDirectory`/`ModsDirectory` keys, which was good
+evidence the *approach* works in practice. But it's also exactly the fragile,
+race-prone pattern the env-var mechanism above exists to replace: `AppSettings.cs`
+caches its `Configuration` object in memory and only persists changes on an explicit
+`Save()` call, so if the extension hand-edited `WitcherScriptMerger.exe.config` while a
+WSM process (GUI or CLI/MCP) was already running against the old, cached config,
+results would be undefined — and `setMergerConfig()` itself doesn't guard against this
+either (it's a best-effort file write with a bare try/catch). **This extension should
+use the `WSM_<KeyName>` env-var mechanism once it lands, not replicate the
+config-file-hand-edit pattern**, even though that pattern has real production
+precedent. **If implementation of this extension begins before that mechanism lands**
+and the hand-edit pattern is used as a stopgap, the same operative rule
+`game-witcher3` itself doesn't enforce still applies: only edit
+`WitcherScriptMerger.exe.config` immediately before spawning a fresh WSM process,
+never while one (GUI or CLI/MCP) is already running against it — that ordering is the
+only mitigation available for this specific race until the env-var mechanism removes
+the shared mutable state entirely.
 
 ### 4.2 Load order / `mods.settings`
 
@@ -345,12 +460,12 @@ not just an implementation nicety.
 
 Reading Vortex's load order and mod layout needs no translation layer — both already
 converge on the same on-disk files (`mods.settings`, the mods directory) regardless of
-which tool produced them. What *does* need explicit handling is the write side: keep
-WSM's `App.config` pointed at the right `GameDirectory`/`ModsDirectory` before each
-invocation, don't let `MergedModName` drift from whatever prefix Vortex's load-order
-locking expects, only scan/merge after deployment (§4.4), and reconcile WSM's merge
-output back into Vortex's own deployment/mod tracking afterward (§4.3) rather than
-assuming Vortex will pick it up automatically.
+which tool produced them. What *does* need explicit handling is the write side: point
+the invoked WSM process at the right `GameDirectory`/`ModsDirectory` for every launch
+(via the `WSM_<KeyName>` env-var mechanism, §4.1), don't let `MergedModName` drift from
+whatever prefix Vortex's load-order locking expects, only scan/merge after deployment
+(§4.4), and reconcile WSM's merge output back into Vortex's own deployment/mod tracking
+afterward (§4.3) rather than assuming Vortex will pick it up automatically.
 
 ---
 
@@ -388,99 +503,144 @@ Proposed surface, roughly in order of how load-bearing each piece is:
   per-source-mod hashes — enough for a user to tell "this merge is stale" the same way
   WSM's own `MergeInventory.HasResolvedConflict` does internally.
 - **A dependency/status tile**, once MCP's `get_status` is wired up: whether
-  KDiff3/QuickBMS/wcc_lite are all found, resolved game/mods directories, configured
+  QuickBMS/wcc_lite are found (only required for bundle-content conflicts; the
+  DiffPlex-based text-merge engine needs no external binary at all — see
+  `docs/decisions/kdiff3-retirement.md`), resolved game/mods directories, configured
   merged-mod name, live conflict count. Useful as a single place to tell the user "your
   script-merge tooling isn't set up" before they hit a confusing failure mid-deploy.
 - **Skipped/manual-resolution reporting.** Both CLI and MCP `merge_conflicts` can leave
-  conflicts unresolved (KDiff3 couldn't auto-solve). The extension should surface these
-  distinctly from "nothing to do" — WSM's headless paths never open KDiff3's GUI for
-  these (`CLAUDE.md`'s CLI/MCP sections), so from the extension's point of view a
-  skipped file needs the user to run WSM's actual GUI to resolve it manually. The
-  extension should probably offer a "launch WSM GUI" fallback action here, rather than
-  trying to reproduce manual conflict resolution itself.
+  conflicts unresolved (DiffPlex couldn't auto-solve them). The extension should
+  surface these distinctly from "nothing to do" — WSM's headless paths never open any
+  GUI for these; instead they write a git/diff3-style conflict-marker sidecar file
+  under `DiffPlexConflicts/` for each genuine conflict (see
+  `WitcherScriptMerger/CLAUDE.md`'s "CLI mode" section). From the extension's point of
+  view, a skipped file needs the user to either open that sidecar directly in their own
+  editor (git-conflict-marker syntax) or launch WSM's actual GUI, which resolves the
+  same conflict interactively. The extension should probably offer both as fallback
+  actions rather than trying to reproduce manual conflict resolution itself.
 
 ---
 
 ## 6. Open questions
 
-For the repo owner to answer before any real implementation starts:
+Updated against the planning effort's findings — several of the original 8 are now
+resolved (marked **Resolved**), one is **Partially resolved**, and the rest remain
+genuinely open (marked **Open**) because nothing found so far settles them.
 
-1. **Relationship to Vortex's existing built-in Script Merger integration (§0).**
-   Should this new extension replace it, coexist alongside it, or should the long-term
-   plan instead be to get Vortex's *own* `game-witcher3` extension pointed at builds
-   from *this* repo instead of the `IDCs/WitcherScriptMerger` fork it uses today (a
-   Vortex-core PR, not something this extension can do unilaterally)? "Coexist" isn't
-   just a UX annoyance (the user prompted twice, or two different WSM
-   forks/binaries downloaded onto the same machine) — §0 and §4.3 found a concrete
-   correctness hazard too: Vortex's existing `importScriptMerges()` path can overwrite
-   this extension's own merge output when a Collection bundling script merges is
-   installed. Any coexistence answer needs to account for that, not just the
-   double-prompt annoyance.
-2. **Packaging/distribution strategy for KDiff3/QuickBMS/wcc_lite.** WSM's own
-   `CLAUDE.md` is explicit that QuickBMS and wcc_lite have unresolved licensing and
-   must never enter source control. Does that same caution block this extension from
-   ever auto-downloading them on the user's behalf, even from a third-party mirror?
-   Or is "detect and reuse whatever Vortex's existing integration already fetched"
-   (§2.2 step 3) the sanctioned answer, permanently, regardless of how good WSM's own
-   self-contained-publish story gets?
-3. **Does this become a public, Nexus-Mods-registry-listed Vortex extension**, or stay
-   a manually-installed/internal tool? This affects branding, support burden, and
-   whether Nexus Mods' own extension review process applies.
-4. **Minimum supported WSM CLI/MCP version.** Once the extension exists, it needs a
-   compatibility contract with WSM releases — does it pin to a specific tag, accept
-   any build advertising the `merge`/`mcp` verbs, or version-negotiate somehow? Nothing
-   in WSM today exposes a `--version` flag or an MCP server-info version string beyond
-   whatever the `ModelContextProtocol` SDK provides by default — worth checking before
-   committing to a specific compatibility mechanism.
-5. **Should WSM itself grow a config-override mechanism** (CLI flags, environment
-   variables, or a `--config` path) for `GameDirectory`/`ModsDirectory`/
-   `MergedModName`, instead of requiring an external caller to hand-edit
-   `WitcherScriptMerger.exe.config` XML (§4.1)? Note this isn't blocked on unproven
-   ground — Vortex's own `setMergerConfig()` already does the hand-edit today (§0), so
-   "it works" isn't really in question. The actual question is whether WSM should offer
-   a first-class, supported alternative so every caller (this extension, Vortex's
-   existing integration, anyone else) isn't independently reimplementing XML surgery
-   against an internal config format that could change. That's WSM-side follow-on
-   work, not something this extension can substitute for.
-6. **Process lifecycle for MCP mode** (§3): spawn-per-action-and-tear-down vs.
-   spawn-once-and-keep-alive for the extension's lifetime vs. something in between.
-   Needs a decision once someone is actually writing the TypeScript client, informed by
-   real measurements of WSM's own startup/dependency-validation cost, not guessed here.
-7. **Concurrent-access safety with a running WSM GUI.** `CLAUDE.md` already flags this
-   risk for MCP-vs-GUI concurrency; this extension adds a third potential concurrent
-   writer (Vortex-triggered CLI/MCP invocations) to the same `MergeInventory.xml` and
-   `App.config`. Does this need an explicit lock/mutex convention across all three, or
-   is "don't run WSM's GUI and this extension against the same install at the same
-   time" an acceptable documented limitation for now?
-8. **Linux/SteamOS timing and approach.** Nexus Mods has publicly committed to native
-   SteamOS support for Vortex, expected later in 2026, but that build doesn't exist yet
-   and Vortex today is Windows-only. Two different questions bundle together here: (a)
-   should this extension's design assume Windows-only for its first real
-   implementation and revisit Linux once Vortex-on-SteamOS actually exists, rather than
-   designing for both simultaneously now; and (b), when that time comes, should a
-   Linux/SteamOS Vortex drive a native headless-Linux WSM build at all, versus simply
-   continuing to shell out to the existing Windows build under the same Proton
-   compatibility layer Witcher 3 itself would already be running under (which sidesteps
-   needing Linux-native KDiff3/QuickBMS/wcc_lite entirely, a much bigger unknown than
-   WSM's own managed-code portability)? (b) is really a question for whoever owns the
-   Linux-support unit of this batch, not this document, but it directly determines
-   whether the headless-only build this section depends on ever needs to target Linux
-   specifically or can stay Windows-only forever and still serve a future SteamOS
-   Vortex via Proton.
+1. **Relationship to `game-witcher3`'s existing built-in Script Merger integration
+   (§0). Partially resolved.** The scope decision at the top of this document settles
+   the headline question: this is a **companion extension**, not a replacement — it
+   does not call `context.registerGame` and does not compete for `game-witcher3`'s own
+   registrations. What remains genuinely open: whether the long-term plan should also
+   include getting `game-witcher3` itself pointed at builds from *this* repo instead of
+   the `IDCs/WitcherScriptMerger` fork it downloads today (a Vortex-core PR, not
+   something this extension can do unilaterally), and how the two now-known
+   coexistence hazards get handled in practice — not just "coexist" as a UX annoyance
+   (the user prompted twice, or two different WSM forks/binaries on the same machine),
+   but two concrete correctness hazards: `importScriptMerges()` overwriting this
+   extension's merge output on Collection install (§0, §4.3), and `mergeBackup.ts`'s
+   per-profile backup/restore having no concept of `MergeInventory.xml` at all (§0, new
+   this round). Both need an explicit answer before real implementation, not just
+   acknowledgment that they exist.
+2. **Open.** Packaging/distribution strategy for QuickBMS/wcc_lite. The root `CLAUDE.md`
+   is explicit that both have unresolved licensing and must never enter source
+   control. Does that same caution block this extension from ever auto-downloading
+   them on the user's behalf, even from a third-party mirror? Or is "detect and reuse
+   whatever `game-witcher3` already fetched" (§2.2 step 3) the sanctioned answer,
+   permanently, regardless of how good WSM's own self-contained-publish story gets?
+   Nothing found this round resolves this — it's still a licensing/policy call for the
+   repo owner.
+3. **Open.** Does this become a public, Nexus-Mods-registry-listed Vortex extension,
+   or stay a manually-installed/internal tool? This affects branding, support burden,
+   and whether Nexus Mods' own extension review process applies. Nothing found this
+   round resolves this either.
+4. **Resolved.** Minimum supported WSM CLI/MCP version. A GitHub Actions release
+   workflow producing self-contained single-file builds attached to GitHub Releases,
+   plus a `--version` CLI flag and an MCP server-info version string, are landing
+   alongside this doc's refresh (a parallel WSM-side unit — not yet in `main` as of
+   this writing, so treat as imminent rather than already-available). Once live, the
+   extension has something concrete to version-check a download or an already-resolved
+   binary against, rather than trusting whatever a release tag happens to contain.
+5. **Resolved (design-level; not yet landed in code).** Should WSM itself grow a
+   config-override mechanism, instead of requiring an external caller to hand-edit
+   `WitcherScriptMerger.exe.config` XML? Yes — the `WSM_<KeyName>` environment-variable
+   override described in §4.1 is the answer, and is that first-class, supported
+   mechanism once it exists: available to this extension, `game-witcher3`, and any
+   other caller, without anyone independently reimplementing XML surgery against an
+   internal config format that could change. **As of this writing, that mechanism does
+   not yet exist in `WitcherScriptMerger.Core/AppSettings.cs`** — it's landing
+   alongside this doc's refresh in a parallel WSM-side unit (same status as Open
+   Question 4's release-workflow/`--version` work), not already merged to `main`. Until
+   it lands, an implementation starting today has to fall back to the hand-edit pattern
+   and its interim safety rule described in §4.1.
+6. **Resolved.** Process lifecycle for MCP mode (§3): spawn per user-initiated
+   workflow, tear down when the relevant panel/dashlet closes. Not a permanent
+   session-long daemon, and not spawn-per-tool-call either — see §3's reasoning
+   (every MCP tool call already re-scans server-side, so a longer-lived process mainly
+   saves the stdio handshake across a burst of related calls). The exact
+   panel/dashlet boundary is still an implementation detail for whoever writes the
+   TypeScript client, not something this document needs to nail down further.
+7. **Open, and now with a second concrete instance.** Concurrent-access safety with a
+   running WSM GUI. This extension adds a potential concurrent writer
+   (Vortex-triggered CLI/MCP invocations) to the same `MergeInventory.xml` a running
+   GUI instance could also be writing to — `AppSettings.cs`'s cache-until-`Save()`
+   model (§4.1) means the same class of race applies to configuration too, at least
+   for any caller still hand-editing the config file instead of using the env-var
+   mechanism. §0's newly-found profile-switch hazard (`mergeBackup.ts`'s
+   `storeToProfile`/`restoreFromProfile`) is a related but distinct concern — that one
+   is triggered by Vortex's own profile switching, not by this extension's own
+   invocations, but it touches the same file. Does any of this need an explicit
+   lock/mutex convention, or is "don't run WSM's GUI and this extension against the
+   same install at the same time" an acceptable documented limitation for now? Nothing
+   found this round resolves it either way.
+8. **Open.** Linux/SteamOS timing and approach. Nexus Mods has publicly committed to
+   native SteamOS support for Vortex, expected later in 2026, but that build doesn't
+   exist yet and Vortex today is Windows-only. Two different questions still bundle
+   together here: (a) should this extension's design assume Windows-only for its first
+   real implementation and revisit Linux once Vortex-on-SteamOS actually exists, rather
+   than designing for both simultaneously now; and (b), when that time comes, should a
+   Linux/SteamOS Vortex drive the now-real, Linux-verified `WitcherScriptMerger.Headless`
+   build natively, versus simply continuing to shell out to the existing Windows build
+   under the same Proton compatibility layer Witcher 3 itself would already be running
+   under (which sidesteps needing Linux-native QuickBMS/wcc_lite entirely, a bigger
+   unknown than WSM's own managed-code portability, which is no longer in question —
+   the Headless host is already verified on real Linux, see §2.2)? (b) is really a
+   question for whoever owns Vortex's eventual SteamOS support, not this document, but
+   it directly determines whether this extension ever needs to target the Linux
+   Headless build specifically or can stay Windows-only forever and still serve a
+   future SteamOS Vortex via Proton.
 
 ---
 
 ## Sources consulted
 
-- This repo's `CLAUDE.md` (CLI mode, MCP mode, Settings & persistence, External tool
-  dependencies sections) — authoritative for everything WSM-side in this document.
-- [`Nexus-Mods/vortex-games`, `game-witcher3/index.js`](https://github.com/Nexus-Mods/vortex-games/blob/master/game-witcher3/index.js) —
-  Vortex's existing Script Merger tool registration, auto-download, `MergeInventory.xml`
-  parsing, and load-order locking logic.
+- This repo's root `CLAUDE.md` and each project's own `CLAUDE.md`
+  (`WitcherScriptMerger/CLAUDE.md`'s CLI/MCP mode sections,
+  `WitcherScriptMerger.Headless/CLAUDE.md`, `WitcherScriptMerger.Core/CLAUDE.md` and its
+  `Mcp/CLAUDE.md`) — authoritative for everything WSM-side in this document. Split
+  across per-project files since an earlier commit federated what used to be one
+  combined `CLAUDE.md`; citations above point at the specific file now responsible for
+  each claim rather than a single generic `CLAUDE.md` reference.
+- [`Nexus-Mods/Vortex`, `extensions/games/game-witcher3/src/`](https://github.com/Nexus-Mods/Vortex/tree/master/extensions/games/game-witcher3/src)
+  (`index.ts`, `scriptmerger.ts`, `mergeInventoryParsing.ts`, `mergeBackup.ts`,
+  `eventHandlers.ts`, `modTypes.ts`) — `game-witcher3`'s current Script Merger tool
+  registration, auto-download, `MergeInventory.xml` parsing, load-order locking, and
+  per-profile merge-backup logic; fetched and read directly via `gh api
+  repos/Nexus-Mods/Vortex/contents/...`, not inferred from a summary.
+- [`Nexus-Mods/vortex-games`](https://github.com/Nexus-Mods/vortex-games) — the repo
+  this document originally cited for `game-witcher3`'s source; confirmed **archived**
+  via `gh api repos/Nexus-Mods/vortex-games` (`"archived": true`) this round, hence the
+  citation switch above.
 - [Nexus Mods Wiki — "Modding The Witcher 3 with Vortex"](https://wiki.nexusmods.com/index.php/Modding_The_Witcher_3_with_Vortex)
 - [Nexus Mods Wiki — "Tool Setup: Witcher 3 Script Merger"](https://wiki.nexusmods.com/index.php/Tool_Setup:_Witcher_3_Script_Merger)
-- [`Nexus-Mods/vortex-api`](https://github.com/Nexus-Mods/vortex-api) — Vortex extension
-  API/typings.
-- [`Nexus-Mods/Vortex` wiki — "General Introduction to Vortex extensions"](https://github.com/Nexus-Mods/Vortex/wiki/MODDINGWIKI-Developers-General-Introduction-to-Vortex-extensions)
+- [`Nexus-Mods/vortex-api`](https://github.com/Nexus-Mods/vortex-api), specifically its
+  published `lib/api.d.ts` typings (fetched via `gh api
+  repos/Nexus-Mods/vortex-api/contents/lib/api.d.ts`) — confirms no `registerTool`
+  method exists, `addDiscoveredTool`'s action-creator shape, and `IRunOptions`' full
+  field list (no stdio/pipe option), all cited directly in §0/§1/§3 above rather than
+  asserted from memory.
+- [`Nexus-Mods/Vortex` wiki — "General Introduction to Vortex extensions"](https://github.com/Nexus-Mods/Vortex/wiki/MODDINGWIKI-Developers-General-Introduction-to-Vortex-extensions) —
+  re-fetched this round to confirm the documented extension entry-point convention is
+  `init(context)`, not `activate(context)` as the first draft had it.
 - Reporting on Nexus Mods' 2026 SteamOS/Steam Deck commitment for Vortex (PC Gamer,
   Steam Deck HQ, OpenCritic coverage of the Nexus Mods roadmap announcement).
