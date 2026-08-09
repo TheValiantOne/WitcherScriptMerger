@@ -18,11 +18,22 @@ merges via `InteractiveMergeRunner`, and wires up async callbacks.
   `dotnet run --project WitcherScriptMerger/WitcherScriptMerger.csproj`.
 - Run (CLI/MCP): see "CLI mode" / "MCP mode" below.
 - **Publish** (self-contained single-file, `win-x64` only — it's a WinForms app, never
-  makes sense on Linux; no existing `.pubxml` profile in this repo, this command is the
-  documented convention instead):
+  makes sense on Linux) via the checked-in publish profile,
+  `Properties/PublishProfiles/win-x64.pubxml`:
   ```
-  dotnet publish WitcherScriptMerger/WitcherScriptMerger.csproj -r win-x64 --self-contained -p:PublishSingleFile=true -c Release
+  dotnet publish WitcherScriptMerger/WitcherScriptMerger.csproj -p:PublishProfile=win-x64
   ```
+  The profile only takes effect when explicitly selected this way (or via Visual
+  Studio's Publish UI) — it sets `RuntimeIdentifier`/`SelfContained`/`PublishSingleFile`
+  itself, so a plain `dotnet build`/`dotnet publish` with no profile is unaffected (no
+  `win-x64` subfolder, no self-contained runtime files). `.github/workflows/release.yml`
+  runs this same command, tag-triggered, for release builds (one leg of a 3-way build
+  matrix, gated on a `dotnet build`/`dotnet test` job — build.yml's own checks only run
+  on a PR, which a direct tag push bypasses — see that file's own comments; a separate
+  job packages the three publish outputs and creates the GitHub Release on
+  `ubuntu-latest`, needed so the `linux-x64` asset — see
+  `WitcherScriptMerger.Headless/CLAUDE.md` — gets a real Unix executable bit, which
+  building the archive on Windows/NTFS cannot set).
   The publish's `<AssemblyName>.dll.config` (the `App.config` copy
   `System.Configuration.ConfigurationManager` actually reads, via Core's
   `AppSettings.cs`) lands next to the executable — copy it there if deploying the exe on
@@ -155,8 +166,27 @@ resolution opens its conflict-marker sidecar in the default editor instead — s
 `CLAUDE.md`). No-args still launches the GUI unchanged; passing `merge` (or any argument)
 is what selects the CLI path.
 
-`RunCli` sets `Environment.CurrentDirectory = AppContext.BaseDirectory` as its first
-statement (several Core paths are relative to it — see Core's `CLAUDE.md`'s
+`WitcherScriptMerger.exe --version` prints the assembly version and exits 0 — checked as
+the very first statement in `RunCli`, ahead of `Environment.CurrentDirectory` and the
+`Settings.HasConfigFile` check, since `AppSettings`'s constructor calls
+`Environment.Exit(1)` when no config file is found (Core's `CLAUDE.md`) and `--version`
+must still work against a freshly-extracted publish directory that hasn't had
+`WitcherScriptMerger.dll.config` copied beside the exe yet. Because this project has
+`GenerateAssemblyInfo=false` (see "Compatibility constraint" below), there's no
+`AssemblyInformationalVersionAttribute` to read — `WitcherScriptMerger.VersionInfo.
+GetVersion()` (Core; shared with the Headless host, see its own `CLAUDE.md`) falls back
+to `Assembly.GetName().Version`, trimming its always-4-part `ToString()` back to 3 parts
+when the unset `Revision` component defaults to 0, so a hand-maintained 3-part
+`AssemblyVersion` (e.g. `"0.6.2"`) round-trips back out as `"0.6.2"`, not `"0.6.2.0"`.
+Bump both `AssemblyVersion`/`AssemblyFileVersion` in `Properties/AssemblyInfo.cs` per
+release (and `WitcherScriptMerger.Headless.csproj`'s `<Version>` — see that project's own
+`CLAUDE.md`, kept in sync by convention, not by anything in this project itself);
+`.github/workflows/release.yml`'s `verify-version` job fails the whole release before any
+publish work starts if a pushed tag doesn't match `AssemblyVersion`, or if
+`WitcherScriptMerger.Headless.csproj`'s `<Version>` doesn't match it either.
+
+`RunCli` sets `Environment.CurrentDirectory = AppContext.BaseDirectory` right after the
+`--version` check (several Core paths are relative to it — see Core's `CLAUDE.md`'s
 `DiffPlexConflictsDirectory` note), then dispatches on `args[0]`. **The `merge` verb
 requires the full combined `Paths.ValidateDependencyPaths()`** (QuickBMS *and* wcc_lite,
 not just the text-merge engine) before doing anything else — this host refuses to start
@@ -181,12 +211,18 @@ args/config/deps), 2 = ran, but one or more conflicts were skipped.
 ### MCP mode (this host)
 
 `WitcherScriptMerger.exe mcp` runs an MCP server over stdio (`ModelContextProtocol`
-NuGet package, `Host.CreateApplicationBuilder().Services.AddMcpServer()
-.WithStdioServerTransport().WithToolsFromAssembly(typeof(WsmMcpTools).Assembly)` — the
-assembly must be passed explicitly since `WsmMcpTools` lives in Core, not this calling
-assembly; the parameterless overload only scans the calling assembly and would silently
-register zero tools). `RunMcp` **also gates on the full combined
-`Paths.ValidateDependencyPaths()`** before starting the server at all — this host won't
+NuGet package, `Host.CreateApplicationBuilder().Services.AddMcpServer(options =>
+options.ServerInfo = new Implementation { Name = "WitcherScriptMerger", Version =
+VersionInfo.GetVersion(typeof(Program).Assembly) }).WithStdioServerTransport()
+.WithToolsFromAssembly(typeof(WsmMcpTools).Assembly)` — the assembly must be passed
+explicitly since `WsmMcpTools` lives in Core, not this calling assembly; the
+parameterless overload only scans the calling assembly
+and would silently register zero tools). `ServerInfo` (the SDK's own
+`ModelContextProtocol.Protocol.Implementation` type — the standard, not a custom,
+mechanism) surfaces the same version `--version` prints, in the `initialize` handshake,
+so an MCP client can tell which build it's talking to and distinguish this host from
+`WitcherScriptMerger.Headless`'s own server by name. `RunMcp` **also gates on the full
+combined `Paths.ValidateDependencyPaths()`** before starting the server at all — this host won't
 even start an MCP server without QuickBMS/wcc_lite configured, regardless of whether the
 client ever calls a bundle-touching tool. This is a stricter gate than
 `WsmMcpTools.RequireDependenciesAndModsDirectory` itself applies per-call (text-merge

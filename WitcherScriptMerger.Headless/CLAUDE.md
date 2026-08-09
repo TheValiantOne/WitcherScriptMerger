@@ -18,14 +18,41 @@ Mirrors `WitcherScriptMerger/Program.cs`'s `args[0] == "merge"` / `args[0] == "m
 dispatch, but with no third (no-args-launches-GUI) branch — no args, or an unrecognized
 first argument, prints usage to stderr and exits 1.
 
-`Environment.CurrentDirectory = AppContext.BaseDirectory` is set as the very first
-statement in `Main`, before touching `AppState.Settings`/`Paths` at all — several Core
+`args[0] == "--version"` is checked before anything else in `Main`, including the
+`Environment.CurrentDirectory` reassignment below — prints the assembly version and
+exits 0. Mirrors the WinForms host's `RunCli` checking `--version` first for the same
+reason: `AppState.Settings`'s construction (first touched inside `RunMerge`/`RunMcp`)
+calls `Environment.Exit(1)` when it can't find a config file (Core's `CLAUDE.md`), and
+`--version` must still work against a freshly-extracted publish directory with no
+`WitcherScriptMerger.Headless.dll.config` copied beside the exe yet. Unlike the WinForms
+host, this project doesn't set `GenerateAssemblyInfo=false`, so its csproj's `<Version>`
+property (kept in sync with the WinForms host's hand-maintained `AssemblyInfo.cs` — see
+"Publishing" below for the release build's automated check of that — and overridable
+per-build via `-p:Version=`) drives a real `AssemblyInformationalVersionAttribute` that
+`WitcherScriptMerger.VersionInfo.GetVersion()` (Core; shared with the WinForms host, not
+duplicated here — see its own `CLAUDE.md`) reads. This project also sets
+`<IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>`
+in its csproj, suppressing the SDK's default `+<git sha>` suffix on that attribute, so
+`--version`/`ServerInfo.Version` print exactly the `<Version>`/`-p:Version=` value (e.g.
+`"0.6.2"`) rather than `"0.6.2+ab12cd3..."` — matching a release tag's own version text
+once "v" is stripped, and matching the WinForms host's own (unsuffixed) output shape.
+
+`Environment.CurrentDirectory = AppContext.BaseDirectory` is set right after the
+`--version` check, before touching `AppState.Settings`/`Paths` at all — several Core
 paths are relative to it (`Paths.Inventory`, `Paths.TempBundleContent`,
 `Paths.DiffPlexConflictsDirectory`, `Paths.MergedBundleContentAbsolute`'s field
 initializer; see Core's `CLAUDE.md`). This mirrors the WinForms host's `Program.RunCli`
-doing the same as its own first statement, except unconditionally as the very first
-thing here — this host has no no-args-launches-GUI branch to worry about leaving
-unreset.
+doing the same as its own first statement after its own `--version` check — this host
+has no no-args-launches-GUI branch to worry about leaving unreset.
+
+`RunMcp`'s `AddMcpServer(...)` call sets `options.ServerInfo = new Implementation {
+Name = "WitcherScriptMerger.Headless", Version =
+VersionInfo.GetVersion(typeof(Program).Assembly) }` — the SDK's own,
+standard mechanism (`ModelContextProtocol.Protocol.Implementation`) for surfacing a
+server's name/version during the `initialize` handshake, not a custom side-channel.
+Mirrors the WinForms host's identical wiring in its own `RunMcp` (see
+`WitcherScriptMerger/CLAUDE.md`'s "MCP mode" section), with a distinct `Name` so a
+client can tell the two hosts' servers apart.
 
 ## What this host deliberately omits
 
@@ -116,14 +143,32 @@ these two; no other occurrences remained.
 
 ## Publishing
 
-No existing `.pubxml` profiles in this repo — these commands are the documented
-convention instead. Cross-compiling for `linux-x64` works fine from Windows — producing
-the binary doesn't require a Linux machine, only *running* it does:
+Two checked-in publish profiles, `Properties/PublishProfiles/win-x64.pubxml` and
+`.../linux-x64.pubxml`, each self-contained/single-file for their `RuntimeIdentifier`.
+They only take effect when explicitly selected this way (or via Visual Studio's Publish
+UI) — a plain `dotnet build`/`dotnet publish` with no profile is unaffected. Cross-
+compiling for `linux-x64` works fine from Windows — producing the binary doesn't require
+a Linux machine, only *running* it does:
 
 ```
-dotnet publish WitcherScriptMerger.Headless/WitcherScriptMerger.Headless.csproj -r win-x64 --self-contained -p:PublishSingleFile=true -c Release
-dotnet publish WitcherScriptMerger.Headless/WitcherScriptMerger.Headless.csproj -r linux-x64 --self-contained -p:PublishSingleFile=true -c Release
+dotnet publish WitcherScriptMerger.Headless/WitcherScriptMerger.Headless.csproj -p:PublishProfile=win-x64
+dotnet publish WitcherScriptMerger.Headless/WitcherScriptMerger.Headless.csproj -p:PublishProfile=linux-x64
 ```
+
+`.github/workflows/release.yml` runs these same two commands (plus the WinForms host's
+own `win-x64` profile), tag-triggered, for release builds, each as its own leg of a
+3-entry build matrix — each of this project's two legs also passed `-p:Version=<version>`
+there (sourced from that workflow's own `verify-version` job, which fails the whole
+release before any publish starts if the tag, `AssemblyInfo.cs`'s `AssemblyVersion`, and
+this project's own csproj `<Version>` don't all three agree — see
+`WitcherScriptMerger/CLAUDE.md`'s "CLI mode" section), which this project's on-by-default
+`GenerateAssemblyInfo` picks up (unlike the WinForms host — see
+`WitcherScriptMerger/CLAUDE.md`'s "Compatibility constraint" section). A separate job in
+that workflow, running on `ubuntu-latest` rather than `windows-latest`, packages all
+three publish outputs and creates the GitHub Release — needed specifically so the
+`linux-x64` asset's `tar.gz` gets built with a real Unix executable bit set on the
+`WitcherScriptMerger.Headless` binary (confirmed empirically: building that same archive
+on Windows/NTFS, which has no such bit, silently produces a non-executable entry).
 
 Each publish's `<AssemblyName>.dll.config` (the `App.config` copy
 `System.Configuration.ConfigurationManager` actually reads) lands next to the executable

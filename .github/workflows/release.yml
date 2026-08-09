@@ -1,0 +1,228 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  # Cheap, dotnet-free sanity check, run first so a bad tag fails fast before any
+  # publish work starts. Also the single source of truth for "version" (a job output)
+  # every later job consumes - always the value read back from the repo's own
+  # AssemblyInfo.cs, not the raw tag text, once the two are confirmed equal below.
+  verify-version:
+    name: Verify release version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # WitcherScriptMerger (the WinForms host) has GenerateAssemblyInfo=false and
+      # hand-maintains its version in Properties/AssemblyInfo.cs instead (see that
+      # project's CLAUDE.md's "Compatibility constraint: TFM must keep the explicit 7.0
+      # OS-version suffix" section) - a `-p:Version=` passed to `dotnet publish` can't
+      # reach it, unlike WitcherScriptMerger.Headless (see the build job below).
+      # WitcherScriptMerger.Headless.csproj's own <Version> property is a second,
+      # independently hand-maintained copy of the same value (see its own comment) with
+      # nothing else enforcing the two stay in sync. Nothing else enforces either against
+      # a pushed release tag. Check all three here and fail loudly on any mismatch,
+      # instead of silently shipping a release with a wrong/inconsistent --version.
+      - name: Check AssemblyInfo.cs / csproj / tag versions agree
+        id: check
+        shell: pwsh
+        run: |
+          $tagVersion = $env:GITHUB_REF_NAME -replace '^v', ''
+
+          # Select-String matches per-line, so the commented-out SDK boilerplate example
+          # two lines above the real attribute ("// [assembly: AssemblyVersion(...")
+          # can never match this ^-anchored pattern - only a line that actually starts
+          # with "[assembly:" can.
+          $asmMatch = Select-String -Path 'WitcherScriptMerger/Properties/AssemblyInfo.cs' `
+            -Pattern '^\[assembly:\s*AssemblyVersion\("([^"]+)"\)\]' | Select-Object -First 1
+          if (-not $asmMatch) {
+            throw "Could not find an uncommented [assembly: AssemblyVersion(...)] line in WitcherScriptMerger/Properties/AssemblyInfo.cs"
+          }
+          $assemblyVersion = $asmMatch.Matches[0].Groups[1].Value
+
+          $csprojMatch = Select-String -Path 'WitcherScriptMerger.Headless/WitcherScriptMerger.Headless.csproj' `
+            -Pattern '<Version>([^<]+)</Version>' | Select-Object -First 1
+          if (-not $csprojMatch) {
+            throw "Could not find a <Version> element in WitcherScriptMerger.Headless/WitcherScriptMerger.Headless.csproj"
+          }
+          $csprojVersion = $csprojMatch.Matches[0].Groups[1].Value
+
+          if ($csprojVersion -ne $assemblyVersion) {
+            throw "WitcherScriptMerger.Headless.csproj's <Version> ('$csprojVersion') does not match WitcherScriptMerger/Properties/AssemblyInfo.cs's AssemblyVersion ('$assemblyVersion') - keep them in sync before tagging a release."
+          }
+          if ($assemblyVersion -ne $tagVersion) {
+            throw "Tag '$env:GITHUB_REF_NAME' (version '$tagVersion') does not match WitcherScriptMerger/Properties/AssemblyInfo.cs's AssemblyVersion ('$assemblyVersion'). Bump AssemblyVersion/AssemblyFileVersion there (and WitcherScriptMerger.Headless.csproj's <Version>) before tagging a release."
+          }
+
+          "version=$assemblyVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+  # build.yml (dotnet build + dotnet format whitespace --verify-no-changes) only runs on
+  # pull_request - a tag pushed directly, without going through a PR, would otherwise
+  # reach the publish/release steps below with zero build or test verification anywhere
+  # in this path. Mirrors build.yml's own build step (windows-latest, Release
+  # configuration) and adds dotnet test, gating the publish matrix job on both passing.
+  test:
+    name: Build & test
+    needs: verify-version
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          cache: true
+          cache-dependency-path: WitcherScriptMerger/WitcherScriptMerger.csproj
+
+      - name: Restore
+        run: dotnet restore WitcherScriptMerger.sln
+
+      - name: Build
+        run: dotnet build WitcherScriptMerger.sln --no-restore --configuration Release
+
+      - name: Test
+        run: dotnet test WitcherScriptMerger.sln --no-build --configuration Release
+
+  # Each matrix entry publishes one host/RID combination via the matching checked-in
+  # Properties/PublishProfiles/<profile>.pubxml (RuntimeIdentifier, SelfContained,
+  # PublishSingleFile - see each host's own CLAUDE.md's publish section) and uploads the
+  # result as a build artifact for the packaging job below. Runs on windows-latest for
+  # all three (matching build.yml's own convention) even though the linux-x64 leg is a
+  # cross-compile that doesn't strictly require it - producing that binary doesn't need
+  # a Linux machine, only running it does (see WitcherScriptMerger.Headless/CLAUDE.md).
+  build:
+    name: Publish ${{ matrix.name }}
+    needs: [verify-version, test]
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: WitcherScriptMerger (win-x64)
+            project: WitcherScriptMerger/WitcherScriptMerger.csproj
+            profile: win-x64
+            publish-dir: WitcherScriptMerger/bin/Release/net10.0-windows7.0/win-x64/publish
+            artifact-name: WitcherScriptMerger-win-x64
+            pass-version: 'false'
+          - name: WitcherScriptMerger.Headless (win-x64)
+            project: WitcherScriptMerger.Headless/WitcherScriptMerger.Headless.csproj
+            profile: win-x64
+            publish-dir: WitcherScriptMerger.Headless/bin/Release/net10.0/win-x64/publish
+            artifact-name: WitcherScriptMerger.Headless-win-x64
+            pass-version: 'true'
+          - name: WitcherScriptMerger.Headless (linux-x64)
+            project: WitcherScriptMerger.Headless/WitcherScriptMerger.Headless.csproj
+            profile: linux-x64
+            publish-dir: WitcherScriptMerger.Headless/bin/Release/net10.0/linux-x64/publish
+            artifact-name: WitcherScriptMerger.Headless-linux-x64
+            pass-version: 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          cache: true
+          cache-dependency-path: WitcherScriptMerger/WitcherScriptMerger.csproj
+
+      # Not passed --no-restore: a RID-specific self-contained publish needs runtime
+      # packages a plain solution-wide restore wouldn't fetch, so each publish does its
+      # own implicit restore for its own RID.
+      #
+      # -p:Version (WitcherScriptMerger.Headless legs only - matrix.pass-version) sets
+      # this build's version from verify-version's checked value. GenerateAssemblyInfo
+      # is off for the WinForms host (matrix.pass-version: 'false' there), so passing it
+      # there would be a silent no-op - omitted rather than included-but-ignored.
+      - name: Publish
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ needs.verify-version.outputs.version }}
+        run: |
+          $versionArg = @()
+          if ("${{ matrix.pass-version }}" -eq 'true') {
+            $versionArg = @("-p:Version=$env:RELEASE_VERSION")
+          }
+          dotnet publish "${{ matrix.project }}" -c Release -p:PublishProfile=${{ matrix.profile }} @versionArg
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact-name }}
+          path: ${{ matrix.publish-dir }}
+          if-no-files-found: error
+
+  # Runs on ubuntu-latest specifically for the linux-x64 asset: `tar` needs to run on a
+  # filesystem with real Unix permission bits to set/preserve the executable bit on the
+  # WitcherScriptMerger.Headless binary before archiving - building the tarball on
+  # windows-latest (NTFS has no such bit) was tried and confirmed to produce a
+  # non-executable entry, defeating the entire reason tar (not zip) was chosen for this
+  # asset. `chmod +x` here is unconditional and explicit rather than relying on the
+  # download-artifact transfer having preserved any prior mode bit.
+  package-release:
+    name: Package & create release
+    needs: [verify-version, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download WitcherScriptMerger (win-x64)
+        uses: actions/download-artifact@v4
+        with:
+          name: WitcherScriptMerger-win-x64
+          path: publish/WitcherScriptMerger-win-x64
+
+      - name: Download WitcherScriptMerger.Headless (win-x64)
+        uses: actions/download-artifact@v4
+        with:
+          name: WitcherScriptMerger.Headless-win-x64
+          path: publish/WitcherScriptMerger.Headless-win-x64
+
+      - name: Download WitcherScriptMerger.Headless (linux-x64)
+        uses: actions/download-artifact@v4
+        with:
+          name: WitcherScriptMerger.Headless-linux-x64
+          path: publish/WitcherScriptMerger.Headless-linux-x64
+
+      # Packages each publish output (including the <AssemblyName>.dll.config the SDK
+      # already copies in next to the exe - see each host's CLAUDE.md's "Publishing"
+      # section for why that file, not App.config itself, is what
+      # ConfigurationManager actually reads at runtime) as one archive per host/RID
+      # combination. zip for the two win-x64 outputs; tar.gz (not zip) for linux-x64
+      # specifically - zip doesn't preserve the Unix executable bit, so an unzipped
+      # Linux binary wouldn't be runnable.
+      - name: Package release assets
+        env:
+          RELEASE_VERSION: ${{ needs.verify-version.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+
+          chmod +x "publish/WitcherScriptMerger.Headless-linux-x64/WitcherScriptMerger.Headless"
+
+          ( cd publish/WitcherScriptMerger-win-x64 && zip -r "../../dist/WitcherScriptMerger-${RELEASE_VERSION}-win-x64.zip" . )
+          ( cd publish/WitcherScriptMerger.Headless-win-x64 && zip -r "../../dist/WitcherScriptMerger.Headless-${RELEASE_VERSION}-win-x64.zip" . )
+          ( cd publish/WitcherScriptMerger.Headless-linux-x64 && tar -czf "../../dist/WitcherScriptMerger.Headless-${RELEASE_VERSION}-linux-x64.tar.gz" . )
+
+      - name: Create GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ needs.verify-version.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" \
+            "dist/WitcherScriptMerger-${RELEASE_VERSION}-win-x64.zip" \
+            "dist/WitcherScriptMerger.Headless-${RELEASE_VERSION}-win-x64.zip" \
+            "dist/WitcherScriptMerger.Headless-${RELEASE_VERSION}-linux-x64.tar.gz" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes

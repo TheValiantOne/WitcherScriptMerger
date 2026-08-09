@@ -34,7 +34,12 @@ still external dependencies rather than an in-process replacement.
   `Mcp/CLAUDE.md`).
 - Root: `AppState.cs` (shared mutable state — see below), `AppSettings.cs`, `Paths.cs`,
   `StringExtensions.cs`, `IMergeNotifier.cs`, `NotifyTypes.cs` (the neutral
-  `NotifyResult`/`NotifyButtons`/`DialogIcon` enums), `HeadlessMergeNotifier.cs`.
+  `NotifyResult`/`NotifyButtons`/`DialogIcon` enums), `HeadlessMergeNotifier.cs`,
+  `VersionInfo.cs` (`GetVersion(Assembly)` — the shared implementation behind both
+  hosts' `--version` CLI flag and their MCP server's `ServerInfo.Version`; not
+  duplicated per host despite the two hosts' differing assembly-versioning setups — see
+  each host's own `CLAUDE.md` for the call sites and why the fallback chain handles both
+  uniformly).
 
 ## AppState & IMergeNotifier
 
