@@ -157,6 +157,47 @@ Both are regression-tested in `WitcherScriptMerger.Tests`
 (`LoadOrder/CustomLoadOrderTests.cs`, `Inventory/FileMergerTests.cs`) — see
 `WitcherScriptMerger.Tests/CLAUDE.md`.
 
+## Config-extensible vanilla-DLC-folder allowlist (`AdditionalVanillaDlcFolderNames`)
+
+`IsVanillaDlcBundleFolder` has a second overload,
+`IsVanillaDlcBundleFolder(string path, IEnumerable<string> additionalFolderNames)` — the
+single-arg overload now just forwards to it with `Array.Empty<string>()`. The two-arg
+overload ORs the built-in regex match with an exact, case-insensitive match of the
+extracted trailing folder-name segment against `additionalFolderNames`, populated at
+`GetUnpackedFiles`' one call site by parsing the `"AdditionalVanillaDlcFolderNames"`
+App.config setting (comma-separated, trimmed of whitespace and stray trailing directory
+separators — the same parse shape `FileIndex/ModFileIndex.GetIgnoredModNames` already
+uses for the sibling `"IgnoreModNames"` setting). This exists so a future DLC/expansion
+whose folder codename isn't recognized by the built-in regex yet (e.g. CD Projekt Red's
+"Songs of the Past", announced in 2026 with no public folder name at time of writing)
+doesn't need a code change — just a config entry.
+
+**Deliberately stays an exact-match allowlist, never existence-based auto-discovery.**
+Vortex's own `witcher3dlc` mod type deploys ordinary user mods into
+`<GameDir>\DLC\<modname>\content\...` — the identical on-disk shape as real vanilla DLC
+content — so treating "any folder under DLC" as a vanilla merge baseline would risk
+silently merging a conflict against a mod's own bundle instead of vanilla's. The two-arg
+overload deliberately takes the extra names as a plain parameter rather than reading
+`AppState.Settings` itself, keeping it a pure, static, directly unit-testable function
+with no config/`AppState` dependency (settings are read exactly once, at the
+`GetUnpackedFiles` call site) — see this file's own "AppState & IMergeNotifier" section
+above for why touching `AppState.Settings` from code a test exercises is a real hazard.
+
+**The built-in regex itself is matched against the extracted folder-name segment, not
+the raw path, and is anchored at both ends (`^...$`).** An earlier version matched an
+end-anchor-only pattern (`"(DLC[0-9]*|ep[0-9]|bob)$"`) against the full path — since
+.NET `Regex.IsMatch` has no implicit start anchor, that matched *any* folder name merely
+*ending* in one of those substrings, not just a folder name that *is* one of them
+(optionally + digits): e.g. `"ImmersiveDLC"` or `"Step1"` would have incorrectly
+qualified as vanilla. Caught in code review while adding the allowlist above, since it's
+exactly the same collision-with-an-arbitrary-mod-folder-name risk the allowlist's own
+"never auto-discovery" rule exists to prevent. Fixed by extracting the folder-name
+segment once, up front, and running both the regex check and the allowlist check against
+that same normalized value (an earlier version also normalized the two checks
+inconsistently — full path for the regex, trimmed segment for the allowlist — a second,
+related bug caught in the same review). Regression-tested via
+`FileMergerTests.IsVanillaDlcBundleFolder_FolderNameMerelyEndsInPattern_ReturnsFalse`.
+
 ## CLI & MCP orchestration (`Cli/`, `Mcp/`)
 
 `Cli/MergeOperations.cs` is the scan-then-merge sequence shared by both hosts' `merge`
