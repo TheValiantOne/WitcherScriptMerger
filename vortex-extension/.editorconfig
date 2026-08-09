@@ -1,0 +1,8 @@
+# This folder is a separate, idiomatic Node/TypeScript project (see README.md), not part
+# of the .NET solution. LF line endings are the standard convention for that ecosystem -
+# and what npm itself always writes for generated files like package-lock.json - so this
+# scopes an override of the repo root .editorconfig's `end_of_line = crlf` (a convention
+# for the .cs/.NET side, see CONTRIBUTING.md) to everything under this folder, rather than
+# changing the shared root file.
+[*]
+end_of_line = lf
