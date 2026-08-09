@@ -33,10 +33,10 @@ namespace WitcherScriptMerger.Tests.Inventory
 		[InlineData(@"C:\Witcher3\DLC\Bob")]
 		public void IsVanillaDlcBundleFolder_DifferentCasing_StillMatches(string path)
 		{
-			// The prior implementation used a case-sensitive regex, which only ever worked
-			// by luck of Windows' case-insensitive filesystem - would have silently never
-			// matched any of these on a case-sensitive filesystem (e.g.
-			// WitcherScriptMerger.Headless running on Linux).
+			// The prior implementation used a case-sensitive regex - since .NET's Regex is
+			// case-sensitive by default regardless of platform, it could silently miss a real
+			// vanilla DLC folder whose on-disk casing simply differs (e.g. a
+			// differently-sourced or repacked install), on any platform.
 			Assert.True(FileMerger.IsVanillaDlcBundleFolder(path));
 		}
 

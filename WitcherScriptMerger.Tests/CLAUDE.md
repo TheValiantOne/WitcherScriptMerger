@@ -20,6 +20,12 @@ does.
   `MergeHeadless_EncodingMismatch_...` fixture reproducing the `baseEffect.ws`-style false
   conflict that motivated it.
 - `Tools/HasherTests.cs` — `Hasher`'s xxHash32 output, including synthetic edge cases.
+- `Inventory/FileMergerTests.cs` — `FileMerger.IsVanillaDlcBundleFolder`: known vanilla
+  DLC-folder names, case-insensitivity, and non-matches (including anchoring) — see
+  Core's `CLAUDE.md`'s "Vortex-fork parity fixes" section.
+- `LoadOrder/CustomLoadOrderTests.cs` — `CustomLoadOrder.ProcessLine`'s tolerance for
+  `mods.settings` "VK=" (VortexKey) lines, via reflection — see Core's `CLAUDE.md`'s
+  "Vortex-fork parity fixes" section.
 - `Tools/KDiff3CrossCheckTests.cs` — an auto-solvable-only A/B check of
   `DiffPlexMergeEngine` against a real `KDiff3.exe` binary, when a developer happens to
   have one locally (WSM no longer bundles or requires KDiff3 itself — see

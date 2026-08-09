@@ -1,4 +1,5 @@
 ﻿using System.Reflection;
+using System.Runtime.CompilerServices;
 using WitcherScriptMerger.LoadOrder;
 using Xunit;
 
@@ -17,17 +18,21 @@ namespace WitcherScriptMerger.Tests.LoadOrder
 	// (accumulates a ModLoadSetting via `ref`) and CustomLoadOrder's constructor reads a
 	// real, fixed path under the current user's Documents folder - reflection avoids
 	// either widening ProcessLine's visibility or refactoring CustomLoadOrder's file-path
-	// coupling just for this test. Constructing a CustomLoadOrder() here is safe
-	// regardless of what's on the test-running machine: Refresh() no-ops (IsValid = true,
-	// empty Mods) when mods.settings doesn't exist, and neither Refresh() nor ProcessLine
-	// touches AppState.Settings (only AppState.Notifier, on the malformed-file path,
-	// which is safe to touch per WitcherScriptMerger.Tests/CLAUDE.md).
+	// coupling just for this test. The instance itself is created via
+	// RuntimeHelpers.GetUninitializedObject rather than `new CustomLoadOrder()`, skipping
+	// the constructor (and its Refresh() call) entirely - ProcessLine touches no instance
+	// state beyond the `ref` setting parameter, so it needs no initialized instance, and
+	// skipping construction avoids depending on the test-running machine's real
+	// mods.settings file, which - unlike the "file doesn't exist" case Refresh() no-ops
+	// on safely - could be present and locked by a running game/Vortex process on a
+	// developer machine with a live install, throwing IOException for a reason unrelated
+	// to what this test actually covers.
 	public class CustomLoadOrderTests
 	{
 		[Fact]
 		public void ProcessLine_VortexKeyLine_IsRecognizedAndIgnored()
 		{
-			var loadOrder = new CustomLoadOrder();
+			var loadOrder = (CustomLoadOrder)RuntimeHelpers.GetUninitializedObject(typeof(CustomLoadOrder));
 			var processLine = typeof(CustomLoadOrder).GetMethod("ProcessLine", BindingFlags.NonPublic | BindingFlags.Instance);
 
 			ModLoadSetting setting = null;
@@ -45,7 +50,7 @@ namespace WitcherScriptMerger.Tests.LoadOrder
 		{
 			// Confirms the VK= fix didn't accidentally widen ProcessLine to silently accept
 			// everything - a genuinely malformed line must still fail the parse.
-			var loadOrder = new CustomLoadOrder();
+			var loadOrder = (CustomLoadOrder)RuntimeHelpers.GetUninitializedObject(typeof(CustomLoadOrder));
 			var processLine = typeof(CustomLoadOrder).GetMethod("ProcessLine", BindingFlags.NonPublic | BindingFlags.Instance);
 
 			ModLoadSetting setting = null;

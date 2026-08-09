@@ -126,6 +126,37 @@ ever going to remain, the interface indirection was deleted as premature abstrac
 own private `DiffPlexMergeEngine` field directly — there's no engine-selection step at
 startup in either host anymore.
 
+## Vortex-fork parity fixes (`mods.settings` "VK=" lines, DLC-bundle-folder matching)
+
+Two small parity gaps versus a separate, Vortex-integrated fork of this project
+(`IDCs/WitcherScriptMerger`, the fork Vortex's real `game-witcher3` extension actually
+drives) were found by direct comparison and fixed here:
+
+- **`LoadOrder/CustomLoadOrder.ProcessLine`** now recognizes and ignores a `VK=`
+  (VortexKey) line instead of falling into the catch-all "unrecognized value" branch.
+  Vortex's own mod-management integration writes this key into `mods.settings`; without
+  this, `ProcessLine` returning `false` aborts `Refresh()`'s entire parse loop
+  (`IsValid` stays `false`, `Mods` stays empty) the moment a Vortex-managed
+  `mods.settings` is read. Deliberately a narrow, explicit `VK=` check rather than a
+  generic "tolerate any unrecognized key" change — the catch-all warning is intentional
+  malformed-file detection, and broadening it to accept-all would remove that
+  protection for a genuinely broken file. If another mod manager introduces another key
+  this parser doesn't know, it fails the same way `VK=` used to, by design; fix it the
+  same way, one recognized key at a time, rather than widening acceptance generically.
+- **`Inventory/FileMerger.IsVanillaDlcBundleFolder`** (backing `GetUnpackedFiles`'s
+  vanilla-bundle lookup) now matches `"bob"` (Blood & Wine's internal DLC folder
+  codename) in addition to `DLC[0-9]*`/`ep[0-9]`, and matches case-insensitively. The
+  original regex had no `bob` alternative at all — Blood & Wine bundle-content
+  conflicts never matched against a vanilla bundle — and was case-sensitive, which
+  matters because real on-disk folder names vary in casing across different game/mod
+  installs regardless of platform. Exposed as a public static pure function (mirroring
+  `DiffPlexMergeEngine.BuildMerge`'s own public/static shape) specifically so it's
+  directly unit-testable.
+
+Both are regression-tested in `WitcherScriptMerger.Tests`
+(`LoadOrder/CustomLoadOrderTests.cs`, `Inventory/FileMergerTests.cs`) — see
+`WitcherScriptMerger.Tests/CLAUDE.md`.
+
 ## CLI & MCP orchestration (`Cli/`, `Mcp/`)
 
 `Cli/MergeOperations.cs` is the scan-then-merge sequence shared by both hosts' `merge`
