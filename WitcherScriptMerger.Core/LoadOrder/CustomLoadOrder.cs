@@ -86,6 +86,14 @@ namespace WitcherScriptMerger.LoadOrder
 				if (!ProcessPriorityLine(line, lineNum, setting))
 					return false;
 			}
+			else if (line.StartsWith("VK="))
+			{
+				// VortexKey - written into mods.settings by Vortex's own mod-management
+				// integration (confirmed against a fork's fix for this exact gap, see
+				// CLAUDE.md); this parser has no use for it, but it's a legitimate line,
+				// not a malformed file, so it's recognized and ignored rather than falling
+				// into the catch-all warning below and aborting the whole parse.
+			}
 			else if (!string.IsNullOrWhiteSpace(line) && !line.StartsWith(";"))
 			{
 				ShowWarningForMalformedFile($"Unrecognized value on line {lineNum}:\n\n{line}");

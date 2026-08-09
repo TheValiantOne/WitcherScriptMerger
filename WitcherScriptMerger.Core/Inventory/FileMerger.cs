@@ -123,6 +123,21 @@ namespace WitcherScriptMerger.Inventory
 		bool _bundleChanged;
 		List<Merge> _pendingBundleMerges = new List<Merge>();
 
+		static readonly Regex VanillaDlcBundleFolderPattern =
+			new Regex(@"(DLC[0-9]*|ep[0-9]|bob)$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+		// Matches a DLC-folder name that has its own "bundles" subfolder to search for a
+		// vanilla bundle: base-game expansions (DLC1, DLC2, ...), the "ep1"/"ep2" xpac
+		// folders, and "bob" - Blood & Wine's internal folder codename (confirmed against
+		// a fork's fix for this exact gap - see CLAUDE.md). IgnoreCase because a
+		// case-sensitive match (the prior behavior) only ever worked by luck of matching
+		// real-world casing on Windows' case-insensitive filesystem - WitcherScriptMerger.
+		// Headless runs on case-sensitive filesystems, where a differently-cased DLC folder
+		// would otherwise silently never match. Public and static (no instance state
+		// involved) specifically so it's directly unit testable, matching
+		// DiffPlexMergeEngine.BuildMerge's own reasoning for the same shape.
+		public static bool IsVanillaDlcBundleFolder(string path) => VanillaDlcBundleFolderPattern.IsMatch(path);
+
 		#endregion
 
 		public FileMerger(MergeInventory inventory)
@@ -714,7 +729,7 @@ namespace WitcherScriptMerger.Inventory
 						.Concat(
 							Directory.Exists(Paths.DlcDirectory)
 								? Directory.GetDirectories(Paths.DlcDirectory)
-									.Where(path => new Regex("DLC[0-9]*$").IsMatch(path) || new Regex("ep[0-9]$").IsMatch(path))
+									.Where(IsVanillaDlcBundleFolder)
 									.Select(path => Path.Combine(path, Paths.BundleBase, "bundles"))
 								: Enumerable.Empty<string>()
 						)
