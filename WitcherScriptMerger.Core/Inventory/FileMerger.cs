@@ -123,8 +123,20 @@ namespace WitcherScriptMerger.Inventory
 		bool _bundleChanged;
 		List<Merge> _pendingBundleMerges = new List<Merge>();
 
+		// Anchored at BOTH ends ("^...$") - see IsVanillaDlcBundleFolder's own comment
+		// below for why this matters: it's matched against just the extracted folder-name
+		// segment, not the full path, so a full-string match is required, not merely a
+		// suffix. Code review on the AdditionalVanillaDlcFolderNames addition caught that
+		// an earlier, end-anchor-only version of this pattern ("(DLC[0-9]*|ep[0-9]|bob)$",
+		// matched against the full path with no start anchor) would satisfy .NET Regex's
+		// "match anywhere in the string" default for ANY folder name merely ending in one
+		// of those substrings - confirmed to incorrectly match e.g. "ImmersiveDLC" (ends
+		// in "DLC") or "Step1" (ends in "ep1") - exactly the kind of arbitrary,
+		// attacker/mod-author-chosen folder name this allowlist's own doc comment warns
+		// about (a Vortex "witcher3dlc"-deployed mod folder with such a name would have
+		// silently qualified as a vanilla merge baseline).
 		static readonly Regex VanillaDlcBundleFolderPattern =
-			new Regex(@"(DLC[0-9]*|ep[0-9]|bob)$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+			new Regex(@"^(DLC[0-9]*|ep[0-9]|bob)$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
 		// Matches a DLC-folder name that has its own "bundles" subfolder to search for a
 		// vanilla bundle: base-game expansions (DLC1, DLC2, ...), the "ep1"/"ep2" xpac
@@ -137,8 +149,52 @@ namespace WitcherScriptMerger.Inventory
 		// match could silently miss a real vanilla DLC folder on any platform, not just
 		// a case-sensitive one. Public and static (no instance state involved)
 		// specifically so it's directly unit testable, matching
-		// DiffPlexMergeEngine.BuildMerge's own reasoning for the same shape.
-		public static bool IsVanillaDlcBundleFolder(string path) => VanillaDlcBundleFolderPattern.IsMatch(path);
+		// DiffPlexMergeEngine.BuildMerge's own reasoning for the same shape. Forwards to
+		// the two-arg overload below with an empty extra-names list, so every existing
+		// caller/test keeps this regex-only behavior unchanged.
+		public static bool IsVanillaDlcBundleFolder(string path) =>
+			IsVanillaDlcBundleFolder(path, Array.Empty<string>());
+
+		// Extends the regex match above with an exact (case-insensitive) match of the
+		// trailing path segment against a caller-supplied allowlist, read from the
+		// "AdditionalVanillaDlcFolderNames" App.config setting (see GetUnpackedFiles'
+		// call site below) - the escape hatch for a future DLC/expansion whose folder
+		// codename isn't known yet (e.g. CD Projekt Red's "Songs of the Past", announced
+		// in 2026 with no folder name public as of this writing) without needing a code
+		// change here every time it happens. Deliberately stays an exact-match
+		// ALLOWLIST, never existence-based auto-discovery: Vortex's own "witcher3dlc" mod
+		// type deploys ordinary user mods into "<GameDir>\DLC\<modname>\content\..." -
+		// the identical on-disk shape as real vanilla DLC content - so treating "any
+		// folder under DLC" as a vanilla baseline would risk silently merging against a
+		// mod's own bundle instead of vanilla's, producing a silently wrong 3-way merge.
+		// Deliberately takes the extra names as a plain parameter rather than reading
+		// AppState.Settings itself, so this stays a pure, static, directly
+		// unit-testable function with no config/AppState dependency - see this project's
+		// CLAUDE.md and WitcherScriptMerger.Tests/CLAUDE.md for why touching
+		// AppState.Settings from code a test exercises is a real hazard (AppSettings'
+		// constructor calls Environment.Exit(1) when no config file is found next to the
+		// entry assembly, which is fatal to the whole `dotnet test` process, not just one
+		// test).
+		//
+		// The path is reduced to just its trailing folder-name segment ONCE, up front,
+		// and both the regex check and the allowlist check run against that same
+		// normalized value - deliberately not "regex against the raw path, allowlist
+		// against the trimmed segment" (an earlier version of this method did exactly
+		// that, an inconsistency code review also caught: a path with a trailing
+		// separator would normalize differently for each branch).
+		public static bool IsVanillaDlcBundleFolder(string path, IEnumerable<string> additionalFolderNames)
+		{
+			var folderName = Path.GetFileName(
+				path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+
+			if (VanillaDlcBundleFolderPattern.IsMatch(folderName))
+				return true;
+
+			if (additionalFolderNames == null)
+				return false;
+
+			return additionalFolderNames.Any(name => !string.IsNullOrEmpty(name) && name.EqualsIgnoreCase(folderName));
+		}
 
 		#endregion
 
@@ -724,6 +780,23 @@ namespace WitcherScriptMerger.Inventory
 				// deliberately doesn't require QuickBMS/wcc_lite to attempt flat-file merges, so
 				// a bundle conflict can now reach this code without one. Flagged in code review,
 				// see CLAUDE.md.
+				// Read once per search, here rather than inside IsVanillaDlcBundleFolder
+				// itself, so that function stays a pure, static, AppState-free function
+				// safely callable from tests - see its own comment above. Comma-separated
+				// exact folder names (not regex fragments - see App.config's own
+				// description of this key), split/trimmed/filtered the same way
+				// ModFileIndex.GetIgnoredModNames already parses the pre-existing
+				// "IgnoreModNames" setting - plus an extra TrimEnd of stray directory
+				// separators a user might paste into the setting (e.g. "SongsOfThePast\"),
+				// since IsVanillaDlcBundleFolder compares against an already
+				// separator-trimmed folder name and would otherwise never match such an
+				// entry.
+				var additionalDlcFolderNames = AppState.Settings.Get("AdditionalVanillaDlcFolderNames")
+					.Split(',')
+					.Where(name => !string.IsNullOrWhiteSpace(name))
+					.Select(name => name.Trim().TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+					.ToArray();
+
 				var bundleDirs =
 					(Directory.Exists(Paths.BundlesDirectory)
 						? Directory.GetDirectories(Paths.BundlesDirectory).Select(path => Path.Combine(path, "bundles"))
@@ -731,7 +804,7 @@ namespace WitcherScriptMerger.Inventory
 						.Concat(
 							Directory.Exists(Paths.DlcDirectory)
 								? Directory.GetDirectories(Paths.DlcDirectory)
-									.Where(IsVanillaDlcBundleFolder)
+									.Where(path => IsVanillaDlcBundleFolder(path, additionalDlcFolderNames))
 									.Select(path => Path.Combine(path, Paths.BundleBase, "bundles"))
 								: Enumerable.Empty<string>()
 						)

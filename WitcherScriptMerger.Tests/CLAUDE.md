@@ -22,7 +22,16 @@ does.
 - `Tools/HasherTests.cs` — `Hasher`'s xxHash32 output, including synthetic edge cases.
 - `Inventory/FileMergerTests.cs` — `FileMerger.IsVanillaDlcBundleFolder`: known vanilla
   DLC-folder names, case-insensitivity, and non-matches (including anchoring) — see
-  Core's `CLAUDE.md`'s "Vortex-fork parity fixes" section.
+  Core's `CLAUDE.md`'s "Vortex-fork parity fixes" section. Also covers the two-arg
+  `IsVanillaDlcBundleFolder(path, additionalFolderNames)` overload backing the
+  `AdditionalVanillaDlcFolderNames` config allowlist: extra-name matches (including
+  case-insensitivity and a trailing path separator), the empty-list case still matching
+  everything the regex alone matches, an extra name absent from the list still returning
+  `false` (no accidental wildcard), a `null` extra-names list degrading to regex-only
+  instead of throwing, and a regression case for a real folder-name-anchoring bug caught
+  in code review (a folder name merely *ending* in a recognized substring, e.g.
+  `"ImmersiveDLC"`/`"Step1"`, must not match) — see Core's `CLAUDE.md`'s "Config-extensible
+  vanilla-DLC-folder allowlist" section.
 - `LoadOrder/CustomLoadOrderTests.cs` — `CustomLoadOrder.ProcessLine`'s tolerance for
   `mods.settings` "VK=" (VortexKey) lines, via reflection — see Core's `CLAUDE.md`'s
   "Vortex-fork parity fixes" section.
