@@ -1,0 +1,30 @@
+{
+  "name": "witcherscriptmerger-vortex",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Vortex (Nexus Mods) companion extension for WitcherScriptMerger (WSM) - drives WSM's MCP server for Witcher 3 script-conflict scanning and merging from inside Vortex.",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "npm run typecheck && webpack --config webpack.config.cjs",
+    "watch": "webpack --config webpack.config.cjs --mode development --watch",
+    "lint": "eslint src test",
+    "test": "vitest run src",
+    "test:integration": "vitest run test"
+  },
+  "overrides": {
+    "react": "16.14.0",
+    "react-dom": "16.14.0"
+  },
+  "devDependencies": {
+    "@nexusmods/vortex-api": "^2.4.2",
+    "@types/node": "^22.10.0",
+    "eslint": "^9.15.0",
+    "ts-loader": "^9.5.1",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.18.0",
+    "vitest": "^2.1.8",
+    "webpack": "^5.97.1",
+    "webpack-cli": "^5.1.4"
+  }
+}

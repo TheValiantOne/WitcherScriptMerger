@@ -1,0 +1,5 @@
+# Force LF for this folder's text files regardless of a contributor's local git
+# core.autocrlf setting - the standard, idiomatic convention for a Node/TypeScript
+# package (see .editorconfig and README.md), independent of the repo root's CRLF
+# convention for the .NET/.cs side (see CONTRIBUTING.md).
+* text=auto eol=lf

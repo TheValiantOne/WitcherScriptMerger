@@ -1,0 +1,6 @@
+{
+  "name": "WitcherScriptMerger Companion",
+  "author": "TheValiantOne/WitcherScriptMerger contributors",
+  "version": "0.1.0",
+  "description": "Companion Vortex extension for WitcherScriptMerger (WSM) - drives WSM's MCP server for Witcher 3 script-conflict scanning and merging from inside Vortex."
+}
