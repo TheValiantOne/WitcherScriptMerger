@@ -33,9 +33,21 @@ this extension's own TypeScript.
 
 ## Status
 
-This is the foundation scaffold (info.json manifest, build tooling, the `init(context)`
-entry point with only game-activity gating wired up, and the shared MCP stdio client in
-`src/mcpClient.ts`). No actual features - tool acquisition, conflict scanning, the merge
-panel, dashlets - are implemented here; those are separate, later units built on top of
-this scaffold. See `docs/vortex-extension-design.md` (once merged) for the fuller design
-context this scaffold follows.
+The foundation scaffold (info.json manifest, build tooling, the `init(context)` entry
+point, and the shared MCP stdio client in `src/mcpClient.ts`) is in place, plus one real
+feature: **tool acquisition**. `src/toolAcquisition.ts` downloads a WSM release build
+from GitHub Releases, verifies/extracts it, and registers it as a discovered Vortex tool
+(`src/discoveredTool.ts`, tool ID `WitcherScriptMergerEnhanced` - distinct from Vortex's
+own built-in `game-witcher3` extension's `W3ScriptMerger`). `src/wsmEnv.ts` builds the
+`WSM_<KeyName>` environment-variable overrides (see
+`WitcherScriptMerger.Core/AppSettings.cs`) used to configure a spawned WSM process -
+never by editing its `.exe.config`/`.dll.config` XML. **The actual GitHub-Releases
+download path is unverified against a real release** - no version tag has been pushed to
+this repo yet, so no release exists; see `src/githubRelease.ts`'s own doc comment and
+this feature's own PR description for exactly what was verified instead (a mocked-HTTP
+unit test for the download logic, plus a full acquisition/registration/env-var-config
+integration test using a locally-built binary standing in for a downloaded one).
+
+Conflict scanning, the merge panel, and dashlets are separate, later units not yet built
+on top of this scaffold. See `docs/vortex-extension-design.md` for the fuller design
+context this scaffold and the tool-acquisition unit follow.
