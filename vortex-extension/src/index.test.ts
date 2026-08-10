@@ -16,8 +16,13 @@ import main from './index';
 import { WITCHER3_GAME_ID } from './gating';
 
 /** A minimal stand-in for IExtensionContext - just enough surface for index.ts's own
- *  logic (context.once, context.api.getState/events.on), matching gating.test.ts's own
- *  fakeApi philosophy: a simplified fake, not a replica of Vortex's real context shape. */
+ *  logic (context.once, context.registerDashlet, context.api.getState/events.on),
+ *  matching gating.test.ts's own fakeApi philosophy: a simplified fake, not a replica of
+ *  Vortex's real context shape. `registerDashlet` needs a real (no-op) implementation,
+ *  not just a type - added alongside mergeHistoryDashlet.ts's registerMergeHistoryDashlet,
+ *  which main() now calls synchronously (see index.ts's own comment on why that call
+ *  sits outside context.once) - without this, every test below would throw
+ *  "context.registerDashlet is not a function" the moment main(context) runs. */
 function fakeContext(initialActiveGameId: string | undefined) {
   const state = { activeGameId: initialActiveGameId };
   let onceCallback: (() => void) | undefined;
@@ -26,6 +31,10 @@ function fakeContext(initialActiveGameId: string | undefined) {
   const context = {
     once: (callback: () => void) => {
       onceCallback = callback;
+    },
+    registerDashlet: (..._args: unknown[]) => {
+      // Intentionally a no-op in tests - mergeHistoryDashlet.test.ts covers
+      // registerMergeHistoryDashlet's own argument-shape/gating behavior directly.
     },
     api: {
       getState: () => state,

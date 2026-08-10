@@ -62,3 +62,17 @@ export const util = {
 export const log = (_level: string, _message: string, _metadata?: unknown): void => {
   // Intentionally a no-op in tests - nothing here asserts on log output.
 };
+
+// `Dashlet` needs a real (if trivial) implementation, not just a type - added alongside
+// mergeHistoryDashlet.ts, which imports it as a value and passes it to
+// `React.createElement` inside its own `MergeHistoryDashlet.render()`. Under real ESM
+// semantics, importing a named binding a module doesn't actually export is a hard error
+// at import time, even if the binding is never called at runtime - and
+// mergeHistoryDashlet.test.ts's own module-level import of mergeHistoryDashlet.ts
+// reaches this import whether or not any test actually renders the component (it
+// doesn't - see that test file's own comment on why: no jsdom in vitest.config.ts).
+// Same "real (if simplified) implementation, not type-only" reasoning as
+// `actions`/`util`/`log` above. A plain function returning its own `children` prop is
+// good enough here - nothing in this repo's tests ever mounts/renders a Dashlet.
+export const Dashlet = (props: { className?: string; title?: string; children?: unknown }): unknown =>
+  props.children ?? null;

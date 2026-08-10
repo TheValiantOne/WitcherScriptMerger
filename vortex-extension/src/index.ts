@@ -1,5 +1,6 @@
 import { log, types } from 'vortex-api';
 import { isWitcher3Active } from './gating';
+import { registerMergeHistoryDashlet } from './mergeHistoryDashlet';
 import { ensureWsmToolRegistered } from './toolAcquisition';
 
 /**
@@ -62,6 +63,12 @@ function main(context: types.IExtensionContext): boolean {
         });
       });
   }
+
+  // Registered synchronously here, not inside context.once below - see
+  // mergeHistoryDashlet.ts's own registerMergeHistoryDashlet doc comment for why a
+  // register call specifically must not be deferred into once, unlike
+  // tryRegisterWsmTool's legitimate use of once just above.
+  registerMergeHistoryDashlet(context);
 
   context.once(() => {
     tryRegisterWsmTool();
