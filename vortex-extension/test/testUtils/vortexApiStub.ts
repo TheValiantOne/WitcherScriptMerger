@@ -18,13 +18,23 @@ import * as fs from 'fs';
 // same simplified-fake-state philosophy - deliberately keyed by gameId (unlike a
 // same-shape "whichever game is active" selector) since `toolAcquisition.ts` always
 // registers its tool under a fixed game id and needs that game's own discovery
-// specifically, not whatever happens to be active when it runs.
+// specifically, not whatever happens to be active when it runs. `profileById` (real
+// signature: `(state: IState, profileId: string) => IProfile`, per
+// @nexusmods/vortex-api's own `lib/api.d.ts`) added alongside `index.ts`'s
+// `checkForConflictsAfterDeploy` for the same reason as `discoveryByGame` - resolving
+// `did-deploy`'s own `profileId` argument to the *deployed* profile's `gameId` is a
+// different question from "what's active right now" (`activeGameId`), and conflating
+// the two was itself the bug this lookup exists to avoid - see index.ts's own comment.
 export const selectors = {
   activeGameId: (state: { activeGameId?: string }): string | undefined => state?.activeGameId,
   discoveryByGame: (
     state: { discoveryByGame?: Record<string, { path?: string } | undefined> },
     gameId: string,
   ): { path?: string } | undefined => state?.discoveryByGame?.[gameId],
+  profileById: (
+    state: { profiles?: Record<string, { gameId?: string } | undefined> },
+    profileId: string,
+  ): { gameId?: string } | undefined => state?.profiles?.[profileId],
 };
 
 // `actions.addDiscoveredTool` needs a real (if simplified) implementation, not just a
