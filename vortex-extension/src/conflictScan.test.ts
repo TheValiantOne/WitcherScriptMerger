@@ -60,6 +60,22 @@ describe('isWsmToolAcquired', () => {
 
     await expect(isWsmToolAcquired(api)).resolves.toBe(true);
   });
+
+  // Mirrors toolAcquisition.test.ts's equivalent test for ensureWsmToolRegistered - this
+  // function is documented as mirroring that module's own pathExists helper in
+  // substance, not just in name, specifically so a locked/permission-denied file isn't
+  // silently mistaken for "nothing installed yet".
+  it('propagates a non-ENOENT filesystem error rather than silently treating it as "not acquired"', async () => {
+    const api = fakeApi(userDataDir);
+    const accessError = Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' });
+    const accessSpy = vi.spyOn(fs.promises, 'access').mockRejectedValueOnce(accessError);
+
+    try {
+      await expect(isWsmToolAcquired(api)).rejects.toThrow(/EBUSY/);
+    } finally {
+      accessSpy.mockRestore();
+    }
+  });
 });
 
 describe('scanWsmConflicts', () => {
@@ -78,11 +94,29 @@ describe('scanWsmConflicts', () => {
 
     expect(result).toEqual([{ relativePath: 'foo.ws' }]);
     expect(connectMock).toHaveBeenCalledTimes(1);
-    const connectArgs = connectMock.mock.calls[0][0] as { exePath: string; env: Record<string, string> };
+    const connectArgs = connectMock.mock.calls[0][0] as { exePath: string; env: Record<string, string>; requestTimeoutMs: number };
     expect(connectArgs.exePath).toBe(getWsmExePath(api));
     expect(connectArgs.env.WSM_GameDirectory).toBe(path.join('C:', 'Games', 'Witcher3'));
     expect(scanConflictsMock).toHaveBeenCalledTimes(1);
     expect(closeMock).toHaveBeenCalledTimes(1);
+  });
+
+  // This handler runs inside Vortex's own emitAndAwait('did-deploy', ...) await window
+  // (see index.ts's own doc comment) - a hung WSM process shouldn't be able to block
+  // Vortex's reported deployment-completion for mcpClient.ts's full general-purpose 30s
+  // default (up to ~60s worst case across two requests).
+  it('requests a shorter-than-default MCP timeout, since this runs inside did-deploy\'s own blocking window', async () => {
+    const closeMock = vi.fn().mockResolvedValue(undefined);
+    const scanConflictsMock = vi.fn().mockResolvedValue([]);
+    connectMock.mockResolvedValue({ scanConflicts: scanConflictsMock, close: closeMock });
+
+    const api = fakeApi(path.join('C:', 'fake', 'userData'));
+    await scanWsmConflicts(api);
+
+    const connectArgs = connectMock.mock.calls[0][0] as { requestTimeoutMs?: number };
+    expect(connectArgs.requestTimeoutMs).toBeDefined();
+    expect(connectArgs.requestTimeoutMs).toBeLessThan(30_000);
+    expect(connectArgs.requestTimeoutMs).toBeGreaterThan(0);
   });
 
   it('still closes the client when scanConflicts itself throws', async () => {
@@ -102,5 +136,45 @@ describe('scanWsmConflicts', () => {
     const api = fakeApi(path.join('C:', 'fake', 'userData'));
 
     await expect(scanWsmConflicts(api)).rejects.toThrow('spawn failed');
+  });
+
+  // Mirrors toolAcquisition.test.ts's "coalesces concurrent calls" test for
+  // acquireWsmTool - same rationale: overlapping did-deploy events must not each spawn
+  // their own WSM process against the same mods folder, and must not let an
+  // out-of-order resolution feed a stale result to a later caller.
+  it('coalesces overlapping calls onto a single in-flight connect/scan', async () => {
+    let resolveScan: ((value: unknown[]) => void) | undefined;
+    const scanConflictsMock = vi.fn().mockReturnValue(
+      new Promise((resolve) => {
+        resolveScan = resolve;
+      }),
+    );
+    const closeMock = vi.fn().mockResolvedValue(undefined);
+    connectMock.mockResolvedValue({ scanConflicts: scanConflictsMock, close: closeMock });
+
+    const api = fakeApi(path.join('C:', 'fake', 'userData'));
+
+    const first = scanWsmConflicts(api);
+    const second = scanWsmConflicts(api);
+
+    resolveScan?.([{ relativePath: 'a.ws' }]);
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(firstResult).toBe(secondResult);
+    expect(connectMock).toHaveBeenCalledTimes(1);
+    expect(scanConflictsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows a fresh scan after a prior one has fully completed (does not coalesce sequential calls)', async () => {
+    const closeMock = vi.fn().mockResolvedValue(undefined);
+    const scanConflictsMock = vi.fn().mockResolvedValue([]);
+    connectMock.mockResolvedValue({ scanConflicts: scanConflictsMock, close: closeMock });
+
+    const api = fakeApi(path.join('C:', 'fake', 'userData'));
+
+    await scanWsmConflicts(api);
+    await scanWsmConflicts(api);
+
+    expect(connectMock).toHaveBeenCalledTimes(2);
   });
 });

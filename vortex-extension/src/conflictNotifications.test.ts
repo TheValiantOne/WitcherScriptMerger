@@ -104,6 +104,59 @@ describe('notifyConflictsIfChanged', () => {
     expect(api.dismissNotification).toHaveBeenCalledWith(WSM_CONFLICTS_NOTIFICATION_ID);
   });
 
+  // Regression test: lastNotifiedSignature now starts at '' (computeConflictSignature's
+  // own value for "no conflicts"), not undefined, specifically so this first-ever check
+  // matches the same-signature early-return and never calls dismissNotification for a
+  // notification that was never sent.
+  it('does not call dismissNotification on the very first check of a session when there are no conflicts at all', () => {
+    const api = fakeApi();
+
+    notifyConflictsIfChanged(api as never, []);
+
+    expect(api.dismissNotification).not.toHaveBeenCalled();
+    expect(api.sendNotification).not.toHaveBeenCalled();
+  });
+
+  describe('failure handling (send/dismiss must not corrupt suppression state)', () => {
+    it('does not throw, and does not record the signature as "shown", when sendNotification throws', () => {
+      const api = fakeApi();
+      api.sendNotification.mockImplementation(() => {
+        throw new Error('store dispatch failed');
+      });
+
+      expect(() => notifyConflictsIfChanged(api as never, [conflict('a.ws')])).not.toThrow();
+
+      // The user never actually saw a notification - a later check with the identical
+      // conflict set must retry, not silently treat it as already shown.
+      const retryApi = fakeApi();
+      notifyConflictsIfChanged(retryApi as never, [conflict('a.ws')]);
+      expect(retryApi.sendNotification).toHaveBeenCalledTimes(1);
+    });
+
+    it('retries dismissNotification on a later call after a prior attempt failed, rather than silently treating the failure as success', () => {
+      const api = fakeApi();
+      // First, genuinely show a notification so the next calls take the "unresolved
+      // set became empty" -> dismissNotification path.
+      notifyConflictsIfChanged(api as never, [conflict('a.ws')]);
+      expect(api.sendNotification).toHaveBeenCalledTimes(1);
+
+      api.dismissNotification.mockImplementationOnce(() => {
+        throw new Error('store dispatch failed');
+      });
+      expect(() => notifyConflictsIfChanged(api as never, [conflict('a.ws', true)])).not.toThrow();
+      expect(api.dismissNotification).toHaveBeenCalledTimes(1);
+
+      // Same (still-empty) unresolved set again. If the failed attempt above had
+      // wrongly committed '' as the new "last known" signature (the pre-fix ordering
+      // bug), this call would see signature === lastNotifiedSignature and skip
+      // retrying entirely - the dismiss would never actually happen and a stale
+      // notification would linger forever. The fix leaves the prior successful ('a.ws')
+      // signature in place on failure, so this must retry.
+      notifyConflictsIfChanged(api as never, [conflict('a.ws', true)]);
+      expect(api.dismissNotification).toHaveBeenCalledTimes(2);
+    });
+  });
+
   describe('activity-in-progress suppression (real Vortex shape: string[] per group)', () => {
     it('skips entirely (no state mutation) while a dependency install is in progress', () => {
       const api = fakeApi({ installing_dependencies: ['some-mod-id'] });

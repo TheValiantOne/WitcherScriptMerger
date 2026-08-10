@@ -30,9 +30,17 @@ import { WITCHER3_GAME_ID } from './gating';
 
 /** A minimal stand-in for IExtensionContext - just enough surface for index.ts's own
  *  logic (context.once, context.api.getState/events.on/onAsync), matching gating.test.ts's
- *  own fakeApi philosophy: a simplified fake, not a replica of Vortex's real context shape. */
-function fakeContext(initialActiveGameId: string | undefined) {
-  const state = { activeGameId: initialActiveGameId };
+ *  own fakeApi philosophy: a simplified fake, not a replica of Vortex's real context shape.
+ *
+ *  `profiles` backs `selectors.profileById` (via the shared `vortexApiStub.ts`) -
+ *  `checkForConflictsAfterDeploy` (index.ts) resolves `did-deploy`'s own `profileId`
+ *  argument to that profile's `gameId`, deliberately *not* `activeGameId` (see index.ts's
+ *  own comment on why those differ) - so tests exercising that handler set up a profile
+ *  entry rather than (only) `setActiveGame`. `activeGameId`/`setActiveGame` remain for the
+ *  unrelated `tryRegisterWsmTool`/`gamemode-activated` tests, which genuinely do gate on
+ *  "what's active right now". */
+function fakeContext(initialActiveGameId: string | undefined, profiles: Record<string, { gameId: string }> = {}) {
+  const state = { activeGameId: initialActiveGameId, profiles };
   let onceCallback: (() => void) | undefined;
   const eventListeners = new Map<string, Array<() => void>>();
   const asyncListeners = new Map<string, (...args: unknown[]) => Promise<unknown>>();
@@ -143,14 +151,19 @@ describe('main (index.ts)', () => {
       fireOnce();
 
       // No handler registered for a plain events.on('did-deploy', ...) - only onAsync.
-      expect(fireAsyncEvent('did-deploy')).toBeInstanceOf(Promise);
+      expect(fireAsyncEvent('did-deploy', 'profile1', undefined)).toBeInstanceOf(Promise);
     });
 
-    it('does nothing when witcher3 is not the active game', async () => {
+    it("does nothing when the deployed profile's own game is not witcher3, even if witcher3 happens to be active", async () => {
+      // Deliberately the inverse of what a naive isWitcher3Active(context.api) check
+      // would give: 'skyrimse' profile deployed while witcher3 is still the currently
+      // active game. The gate must follow the deployed profile, not "what's active".
       ensureWsmToolRegisteredMock.mockClear().mockResolvedValue(false);
       isWsmToolAcquiredMock.mockClear();
       scanWsmConflictsMock.mockClear();
-      const { context, fireOnce, fireAsyncEvent } = fakeContext('skyrimse');
+      const { context, fireOnce, fireAsyncEvent } = fakeContext(WITCHER3_GAME_ID, {
+        profile1: { gameId: 'skyrimse' },
+      });
 
       main(context);
       fireOnce();
@@ -160,12 +173,51 @@ describe('main (index.ts)', () => {
       expect(scanWsmConflictsMock).not.toHaveBeenCalled();
     });
 
+    it('does nothing when the profileId is unknown (no matching profile at all)', async () => {
+      ensureWsmToolRegisteredMock.mockClear().mockResolvedValue(false);
+      isWsmToolAcquiredMock.mockClear();
+      scanWsmConflictsMock.mockClear();
+      const { context, fireOnce, fireAsyncEvent } = fakeContext(WITCHER3_GAME_ID, {});
+
+      main(context);
+      fireOnce();
+      await fireAsyncEvent('did-deploy', 'unknown-profile', undefined);
+
+      expect(isWsmToolAcquiredMock).not.toHaveBeenCalled();
+      expect(scanWsmConflictsMock).not.toHaveBeenCalled();
+    });
+
+    it("scans a witcher3 deployment even if a different game has since become active (fixes the isWitcher3Active-at-handler-time race)", async () => {
+      // The scenario the profileId-based gate specifically exists to handle: the
+      // deployed profile really was witcher3, but by the time this async handler runs,
+      // the user already switched the *active* game elsewhere. A naive
+      // isWitcher3Active(context.api) check would wrongly skip this.
+      ensureWsmToolRegisteredMock.mockClear().mockResolvedValue(false);
+      isWsmToolAcquiredMock.mockClear().mockResolvedValue(true);
+      const conflicts = [{ relativePath: 'a.ws' }];
+      scanWsmConflictsMock.mockClear().mockResolvedValue(conflicts);
+      notifyConflictsIfChangedMock.mockClear();
+      const { context, fireOnce, fireAsyncEvent, setActiveGame } = fakeContext(WITCHER3_GAME_ID, {
+        profile1: { gameId: WITCHER3_GAME_ID },
+      });
+
+      main(context);
+      fireOnce();
+      setActiveGame('skyrimse');
+      await fireAsyncEvent('did-deploy', 'profile1', undefined);
+
+      expect(scanWsmConflictsMock).toHaveBeenCalledTimes(1);
+      expect(notifyConflictsIfChangedMock).toHaveBeenCalledWith(context.api, conflicts);
+    });
+
     it('skips scanning (without throwing) when no WSM tool has been acquired yet', async () => {
       ensureWsmToolRegisteredMock.mockClear().mockResolvedValue(false);
       isWsmToolAcquiredMock.mockClear().mockResolvedValue(false);
       scanWsmConflictsMock.mockClear();
       notifyConflictsIfChangedMock.mockClear();
-      const { context, fireOnce, fireAsyncEvent } = fakeContext(WITCHER3_GAME_ID);
+      const { context, fireOnce, fireAsyncEvent } = fakeContext(WITCHER3_GAME_ID, {
+        profile1: { gameId: WITCHER3_GAME_ID },
+      });
 
       main(context);
       fireOnce();
@@ -176,13 +228,15 @@ describe('main (index.ts)', () => {
       expect(notifyConflictsIfChangedMock).not.toHaveBeenCalled();
     });
 
-    it('scans and notifies when witcher3 is active and a WSM tool is acquired', async () => {
+    it('scans and notifies for a witcher3 deployment', async () => {
       ensureWsmToolRegisteredMock.mockClear().mockResolvedValue(false);
       isWsmToolAcquiredMock.mockClear().mockResolvedValue(true);
       const conflicts = [{ relativePath: 'a.ws' }];
       scanWsmConflictsMock.mockClear().mockResolvedValue(conflicts);
       notifyConflictsIfChangedMock.mockClear();
-      const { context, fireOnce, fireAsyncEvent } = fakeContext(WITCHER3_GAME_ID);
+      const { context, fireOnce, fireAsyncEvent } = fakeContext(WITCHER3_GAME_ID, {
+        profile1: { gameId: WITCHER3_GAME_ID },
+      });
 
       main(context);
       fireOnce();
@@ -197,12 +251,38 @@ describe('main (index.ts)', () => {
       isWsmToolAcquiredMock.mockClear().mockResolvedValue(true);
       scanWsmConflictsMock.mockClear().mockRejectedValue(new Error('spawn failed'));
       notifyConflictsIfChangedMock.mockClear();
-      const { context, fireOnce, fireAsyncEvent } = fakeContext(WITCHER3_GAME_ID);
+      const { context, fireOnce, fireAsyncEvent } = fakeContext(WITCHER3_GAME_ID, {
+        profile1: { gameId: WITCHER3_GAME_ID },
+      });
 
       main(context);
       fireOnce();
 
       await expect(fireAsyncEvent('did-deploy', 'profile1', undefined)).resolves.toBeUndefined();
+      expect(notifyConflictsIfChangedMock).not.toHaveBeenCalled();
+    });
+
+    // Regression test: isWsmToolAcquired is documented (conflictScan.ts) to propagate
+    // non-ENOENT filesystem errors rather than silently returning false. That call must
+    // stay inside checkForConflictsAfterDeploy's own try/catch, or a real EBUSY/EPERM
+    // (an antivirus scan, a concurrently running WSM process) would reject this
+    // onAsync('did-deploy', ...) handler's promise straight into Vortex's own
+    // emitAndAwait('did-deploy', ...) dispatch - exactly what onAsync's contract
+    // forbids.
+    it('resolves (never rejects) when isWsmToolAcquired throws a non-ENOENT filesystem error', async () => {
+      ensureWsmToolRegisteredMock.mockClear().mockResolvedValue(false);
+      isWsmToolAcquiredMock.mockClear().mockRejectedValue(Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' }));
+      scanWsmConflictsMock.mockClear();
+      notifyConflictsIfChangedMock.mockClear();
+      const { context, fireOnce, fireAsyncEvent } = fakeContext(WITCHER3_GAME_ID, {
+        profile1: { gameId: WITCHER3_GAME_ID },
+      });
+
+      main(context);
+      fireOnce();
+
+      await expect(fireAsyncEvent('did-deploy', 'profile1', undefined)).resolves.toBeUndefined();
+      expect(scanWsmConflictsMock).not.toHaveBeenCalled();
       expect(notifyConflictsIfChangedMock).not.toHaveBeenCalled();
     });
   });

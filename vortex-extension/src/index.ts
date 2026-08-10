@@ -1,7 +1,7 @@
-import { log, types } from 'vortex-api';
+import { log, selectors, types } from 'vortex-api';
 import { isWsmToolAcquired, scanWsmConflicts } from './conflictScan';
 import { notifyConflictsIfChanged } from './conflictNotifications';
-import { isWitcher3Active } from './gating';
+import { isWitcher3Active, WITCHER3_GAME_ID } from './gating';
 import { ensureWsmToolRegistered } from './toolAcquisition';
 
 /**
@@ -83,24 +83,55 @@ function main(context: types.IExtensionContext): boolean {
   // considered a bug if the listener returns a rejected promise" - so every path here
   // must resolve, never reject, matching tryRegisterWsmTool's own catch-and-log
   // (non-throwing) shape above.
-  async function checkForConflictsAfterDeploy(): Promise<void> {
-    if (!isWitcher3Active(context.api)) {
+  //
+  // Gates on the *deployed* profile's own game (via did-deploy's own `profileId`
+  // argument, looked up with `selectors.profileById`), not `isWitcher3Active(context.api)`
+  // (whichever game happens to be active at the moment this async handler actually
+  // runs). Those are not the same thing: `did-deploy` fires once deployment completes,
+  // and by the time this handler's own turn comes up (after every other handler
+  // `emitAndAwait` is also waiting on), the user may already have switched to a
+  // different game. `isWitcher3Active` would then read the *new* active game and skip a
+  // real Witcher 3 deployment's scan entirely - a false negative that misses genuine
+  // conflicts, not just an ordering nicety. `did-deploy`'s own `IDeploymentManifest`
+  // exposes an optional `gameId`, but it's `gameId?: string` (not guaranteed present),
+  // so `profileId` -> `selectors.profileById(...).gameId` is the reliable, time-invariant
+  // signal used here instead. **Not a verbatim copy of `game-witcher3`'s own
+  // `eventHandlers.ts`/`util.ts` `validateProfile(profileId, state)`** - read directly:
+  // that function still ultimately keys off `selectors.activeProfile(state).gameId` (the
+  // same "what's active *now*" read this comment argues against), just with an added
+  // guard that `profileId` matches the currently active profile's own id. That's the
+  // right call for what `game-witcher3` uses it for (INI/load-order bookkeeping that
+  // only makes sense for the actively-displayed profile) but not for this extension's
+  // narrower job here - telling the user about conflicts from a deployment that
+  // genuinely happened is still correct even if they've since tabbed to another game, so
+  // this deliberately drops the "still the active profile" cross-check and trusts
+  // `profileId` alone, which is what actually removes the race rather than just
+  // narrowing its window.
+  async function checkForConflictsAfterDeploy(profileId: string): Promise<void> {
+    const deployedGameId = selectors.profileById(context.api.getState(), profileId)?.gameId;
+    if (deployedGameId !== WITCHER3_GAME_ID) {
       return;
     }
 
-    if (!(await isWsmToolAcquired(context.api))) {
-      // Same normal, expected state tryRegisterWsmTool already logs at 'debug' above -
-      // no WSM binary acquired yet is not an error worth spawning a doomed process to
-      // discover.
-      log('debug', 'witcherscriptmerger-vortex: no acquired WSM tool - skipping post-deploy conflict scan');
-      return;
-    }
-
+    // isWsmToolAcquired is inside this try, not gating ahead of it: it can now throw
+    // for a non-ENOENT filesystem error (a locked/permission-denied exe path, e.g. an
+    // antivirus scan or a concurrently running WSM process - see conflictScan.ts's own
+    // doc comment), and the onAsync contract this handler must honor forbids a
+    // rejected promise reaching Vortex's own did-deploy dispatch, exactly like a
+    // failure from scanWsmConflicts/notifyConflictsIfChanged below.
     try {
+      if (!(await isWsmToolAcquired(context.api))) {
+        // Same normal, expected state tryRegisterWsmTool already logs at 'debug' above -
+        // no WSM binary acquired yet is not an error worth spawning a doomed process to
+        // discover.
+        log('debug', 'witcherscriptmerger-vortex: no acquired WSM tool - skipping post-deploy conflict scan');
+        return;
+      }
+
       const conflicts = await scanWsmConflicts(context.api);
       notifyConflictsIfChanged(context.api, conflicts);
     } catch (err) {
-      log('warn', 'witcherscriptmerger-vortex: failed to scan for script conflicts after deployment', {
+      log('warn', 'witcherscriptmerger-vortex: post-deploy conflict scan failed', {
         error: err instanceof Error ? err.message : String(err),
       });
     }

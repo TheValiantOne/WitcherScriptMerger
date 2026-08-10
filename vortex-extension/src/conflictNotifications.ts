@@ -115,12 +115,18 @@ function isModOrDependencyInstallActive(api: types.IExtensionApi): boolean {
 
 /** Module-level "last seen" state - deliberately in-memory only and scoped to this
  *  extension's own process lifetime (one Vortex session), per this unit's own
- *  suppression requirement: no persisted cross-session state needed. Exported reset
- *  hook is for test isolation only - no production caller should ever need it. */
-let lastNotifiedSignature: string | undefined;
+ *  suppression requirement: no persisted cross-session state needed. Initialized to
+ *  `''` - the same value `computeConflictSignature([])` produces for "no unresolved
+ *  conflicts" - rather than `undefined`, specifically so the very first check of a
+ *  session with zero conflicts matches the "nothing changed" early-return below and
+ *  never calls `dismissNotification` for an id that was never sent (harmless against
+ *  the real Vortex API, which no-ops on an unknown id, but pointless noise otherwise).
+ *  Exported reset hook is for test isolation only - no production caller should ever
+ *  need it. */
+let lastNotifiedSignature = '';
 
 export function resetConflictNotificationState(): void {
-  lastNotifiedSignature = undefined;
+  lastNotifiedSignature = '';
 }
 
 /**
@@ -145,6 +151,19 @@ export function resetConflictNotificationState(): void {
  * signature changes to "no unresolved conflicts" (e.g. the user resolved them via the
  * GUI since the last check), any existing notification is dismissed rather than left
  * stale.
+ *
+ * `lastNotifiedSignature` is committed only *after* the `sendNotification`/
+ * `dismissNotification` call itself completes without throwing - deliberately not
+ * before. `context.api.sendNotification`/`dismissNotification` are both typed optional
+ * (`?:`) on `IExtensionApi`, and this function is reachable from `index.ts`'s
+ * `onAsync('did-deploy', ...)` handler where a thrown error must never propagate (see
+ * that file's own comment on `onAsync`'s contract) - so any failure here is caught,
+ * logged, and swallowed locally rather than left to a misleading catch-all message
+ * further up the call stack. Committing the signature only on success matters
+ * concretely: if the call had failed *after* the signature was already recorded, the
+ * user would never have actually seen the notification, yet every later `did-deploy`
+ * with that same conflict set would silently skip re-attempting it for the rest of the
+ * session (the same-signature early-return above would treat it as "already shown").
  */
 export function notifyConflictsIfChanged(api: types.IExtensionApi, conflicts: ScanConflictsResult): void {
   if (isModOrDependencyInstallActive(api)) {
@@ -158,18 +177,29 @@ export function notifyConflictsIfChanged(api: types.IExtensionApi, conflicts: Sc
   if (signature === lastNotifiedSignature) {
     return;
   }
-  lastNotifiedSignature = signature;
 
-  if (unresolved.length === 0) {
-    api.dismissNotification?.(WSM_CONFLICTS_NOTIFICATION_ID);
+  try {
+    if (unresolved.length === 0) {
+      api.dismissNotification?.(WSM_CONFLICTS_NOTIFICATION_ID);
+    } else {
+      api.sendNotification?.({
+        id: WSM_CONFLICTS_NOTIFICATION_ID,
+        type: 'warning',
+        message: `WitcherScriptMerger: ${unresolved.length} unresolved script conflict${unresolved.length === 1 ? '' : 's'} found`,
+        allowSuppress: true,
+        actions: [],
+      });
+    }
+  } catch (err) {
+    // Never let this escape to the caller - see this function's own doc comment above.
+    // Deliberately not committing lastNotifiedSignature below in this branch: a failed
+    // attempt must not be recorded as "already shown," or the user would silently never
+    // see it, this session, for this exact conflict set.
+    log('warn', 'witcherscriptmerger-vortex: failed to show/update the conflict notification', {
+      error: err instanceof Error ? err.message : String(err),
+    });
     return;
   }
 
-  api.sendNotification?.({
-    id: WSM_CONFLICTS_NOTIFICATION_ID,
-    type: 'warning',
-    message: `WitcherScriptMerger: ${unresolved.length} unresolved script conflict${unresolved.length === 1 ? '' : 's'} found`,
-    allowSuppress: true,
-    actions: [],
-  });
+  lastNotifiedSignature = signature;
 }
