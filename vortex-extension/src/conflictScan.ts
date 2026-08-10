@@ -15,9 +15,17 @@ import { buildWsmEnv, mergeWithProcessEnv } from './wsmEnv';
  * trigger here is Vortex's own `did-deploy` event rather than a button click, but the
  * lifecycle rule doesn't distinguish between the two.
  *
- * Callers are responsible for their own `isWitcher3Active(api)` gating - see
- * `gating.ts`'s own doc comment for why every feature this extension registers gates on
- * that check, and `index.ts` for where this module's own caller does so.
+ * Callers are responsible for their own gating on Witcher 3 - see `gating.ts`'s own doc
+ * comment for the general rule every feature this extension registers follows. This
+ * module's only real caller (`index.ts`'s `checkForConflictsAfterDeploy`) does *not*
+ * use the general-purpose `isWitcher3Active(api)` helper for that gating, though - it
+ * resolves `did-deploy`'s own `profileId` argument to that specific deployed profile's
+ * `gameId` instead, since "whichever game is active right now" and "which game this
+ * particular deployment was actually for" are two different questions for a
+ * post-deployment hook (see `index.ts`'s own doc comment for the full reasoning). Any
+ * *other* future caller of `scanWsmConflicts`/`isWsmToolAcquired` that isn't reacting to
+ * a specific past deployment should still default to `isWitcher3Active(api)`, per
+ * `gating.ts`'s own general rule.
  */
 
 /** Absolute path to the WSM Headless exe this extension would have acquired, per
@@ -123,6 +131,17 @@ async function scanWsmConflictsUncoordinated(api: types.IExtensionApi): Promise<
   const gameDirectory = selectors.discoveryByGame(api.getState(), WITCHER3_GAME_ID)?.path;
   const env = mergeWithProcessEnv(buildWsmEnv({ gameDirectory }));
 
+  // Note a real, acknowledged TOCTOU gap here, not a claim of one that doesn't exist:
+  // this connect() re-derives the exe path independently of whatever isWsmToolAcquired
+  // check a caller may have already done (index.ts does one before calling this), so a
+  // concurrent re-acquisition (acquireWsmTool overwrites installDir in place - see
+  // storage.ts/toolAcquisition.ts) between that check and this connect() could spawn
+  // against a mid-write or momentarily-missing exe. Not fixed here: this is an
+  // inherent check-then-act gap in any two-step "confirm it exists, then use it"
+  // pattern, and the failure mode is already fully contained - WsmMcpClient.connect
+  // rejects, and index.ts's own try/catch around this call already logs it as a
+  // warning rather than crashing or hanging. Worth documenting, not worth adding
+  // synchronization machinery for a rare, already-safely-handled race.
   const client = await WsmMcpClient.connect({
     exePath: getWsmExePath(api),
     env,

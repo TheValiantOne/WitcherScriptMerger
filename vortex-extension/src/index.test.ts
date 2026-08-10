@@ -5,11 +5,18 @@ import { describe, expect, it, vi } from 'vitest';
 // own wiring (what this file actually tests) from toolAcquisition.ts/conflictScan.ts/
 // conflictNotifications.ts's own real behavior, each already thoroughly covered by their
 // own *.test.ts files.
-const { ensureWsmToolRegisteredMock, isWsmToolAcquiredMock, scanWsmConflictsMock, notifyConflictsIfChangedMock } = vi.hoisted(() => ({
+const {
+  ensureWsmToolRegisteredMock,
+  isWsmToolAcquiredMock,
+  scanWsmConflictsMock,
+  notifyConflictsIfChangedMock,
+  isModOrDependencyInstallActiveMock,
+} = vi.hoisted(() => ({
   ensureWsmToolRegisteredMock: vi.fn(),
   isWsmToolAcquiredMock: vi.fn(),
   scanWsmConflictsMock: vi.fn(),
   notifyConflictsIfChangedMock: vi.fn(),
+  isModOrDependencyInstallActiveMock: vi.fn(),
 }));
 
 vi.mock('./toolAcquisition', () => ({
@@ -23,6 +30,7 @@ vi.mock('./conflictScan', () => ({
 
 vi.mock('./conflictNotifications', () => ({
   notifyConflictsIfChanged: notifyConflictsIfChangedMock,
+  isModOrDependencyInstallActive: isModOrDependencyInstallActiveMock,
 }));
 
 import main from './index';
@@ -194,6 +202,7 @@ describe('main (index.ts)', () => {
       // isWitcher3Active(context.api) check would wrongly skip this.
       ensureWsmToolRegisteredMock.mockClear().mockResolvedValue(false);
       isWsmToolAcquiredMock.mockClear().mockResolvedValue(true);
+      isModOrDependencyInstallActiveMock.mockClear().mockReturnValue(false);
       const conflicts = [{ relativePath: 'a.ws' }];
       scanWsmConflictsMock.mockClear().mockResolvedValue(conflicts);
       notifyConflictsIfChangedMock.mockClear();
@@ -231,6 +240,7 @@ describe('main (index.ts)', () => {
     it('scans and notifies for a witcher3 deployment', async () => {
       ensureWsmToolRegisteredMock.mockClear().mockResolvedValue(false);
       isWsmToolAcquiredMock.mockClear().mockResolvedValue(true);
+      isModOrDependencyInstallActiveMock.mockClear().mockReturnValue(false);
       const conflicts = [{ relativePath: 'a.ws' }];
       scanWsmConflictsMock.mockClear().mockResolvedValue(conflicts);
       notifyConflictsIfChangedMock.mockClear();
@@ -246,9 +256,33 @@ describe('main (index.ts)', () => {
       expect(notifyConflictsIfChangedMock).toHaveBeenCalledWith(context.api, conflicts);
     });
 
+    // Fix for a real wasted-work case: notifyConflictsIfChanged would discard this
+    // scan's result anyway (it checks the same condition), so checking before ever
+    // spawning a WSM process avoids paying for a process spawn whose result can never
+    // be shown - concretely relevant during a dependency-install burst (e.g. installing
+    // a Collection triggers several deploy-per-mod cycles in a row).
+    it('does not spawn a scan at all while a mod/dependency install is in progress', async () => {
+      ensureWsmToolRegisteredMock.mockClear().mockResolvedValue(false);
+      isWsmToolAcquiredMock.mockClear().mockResolvedValue(true);
+      isModOrDependencyInstallActiveMock.mockClear().mockReturnValue(true);
+      scanWsmConflictsMock.mockClear();
+      notifyConflictsIfChangedMock.mockClear();
+      const { context, fireOnce, fireAsyncEvent } = fakeContext(WITCHER3_GAME_ID, {
+        profile1: { gameId: WITCHER3_GAME_ID },
+      });
+
+      main(context);
+      fireOnce();
+      await fireAsyncEvent('did-deploy', 'profile1', undefined);
+
+      expect(scanWsmConflictsMock).not.toHaveBeenCalled();
+      expect(notifyConflictsIfChangedMock).not.toHaveBeenCalled();
+    });
+
     it('resolves (never rejects) when scanWsmConflicts throws - onAsync listeners must report their own errors', async () => {
       ensureWsmToolRegisteredMock.mockClear().mockResolvedValue(false);
       isWsmToolAcquiredMock.mockClear().mockResolvedValue(true);
+      isModOrDependencyInstallActiveMock.mockClear().mockReturnValue(false);
       scanWsmConflictsMock.mockClear().mockRejectedValue(new Error('spawn failed'));
       notifyConflictsIfChangedMock.mockClear();
       const { context, fireOnce, fireAsyncEvent } = fakeContext(WITCHER3_GAME_ID, {
@@ -284,6 +318,36 @@ describe('main (index.ts)', () => {
       await expect(fireAsyncEvent('did-deploy', 'profile1', undefined)).resolves.toBeUndefined();
       expect(scanWsmConflictsMock).not.toHaveBeenCalled();
       expect(notifyConflictsIfChangedMock).not.toHaveBeenCalled();
+    });
+
+    // Regression test: the try/catch wraps the entire handler body now, including the
+    // selectors.profileById(context.api.getState(), profileId) gate at the very top -
+    // not just the parts already known to be able to throw (isWsmToolAcquired,
+    // scanWsmConflicts). A synchronous throw from state lookup should be as unlikely
+    // as it is cheap to guard against, but onAsync's "never reject" contract applies to
+    // the whole handler.
+    it('resolves (never rejects) when reading state for the deployed-profile gate throws synchronously', async () => {
+      ensureWsmToolRegisteredMock.mockClear().mockResolvedValue(false);
+      isWsmToolAcquiredMock.mockClear();
+      scanWsmConflictsMock.mockClear();
+      notifyConflictsIfChangedMock.mockClear();
+      const { context, fireOnce, fireAsyncEvent } = fakeContext(WITCHER3_GAME_ID, {
+        profile1: { gameId: WITCHER3_GAME_ID },
+      });
+
+      // main()/fireOnce() run first, using the working getState for
+      // tryRegisterWsmTool's own unrelated isWitcher3Active check - only sabotage
+      // getState afterward, right before firing did-deploy, so this test isolates the
+      // did-deploy handler's own robustness rather than breaking context.once itself.
+      main(context);
+      fireOnce();
+      context.api.getState = () => {
+        throw new Error('state store unavailable');
+      };
+
+      await expect(fireAsyncEvent('did-deploy', 'profile1', undefined)).resolves.toBeUndefined();
+      expect(isWsmToolAcquiredMock).not.toHaveBeenCalled();
+      expect(scanWsmConflictsMock).not.toHaveBeenCalled();
     });
   });
 });

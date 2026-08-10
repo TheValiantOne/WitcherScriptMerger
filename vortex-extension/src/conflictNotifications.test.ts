@@ -1,12 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ScanConflictsResult } from './mcpClient';
-import { computeConflictSignature, notifyConflictsIfChanged, resetConflictNotificationState, WSM_CONFLICTS_NOTIFICATION_ID } from './conflictNotifications';
+import {
+  computeConflictSignature,
+  isModOrDependencyInstallActive,
+  notifyConflictsIfChanged,
+  resetConflictNotificationState,
+  WSM_CONFLICTS_NOTIFICATION_ID,
+} from './conflictNotifications';
 
-function conflict(relativePath: string, alreadyResolved = false): ScanConflictsResult[number] {
+function conflict(relativePath: string, alreadyResolved = false, modNames: string[] = []): ScanConflictsResult[number] {
   return {
     relativePath,
     category: 'Script',
-    mods: [],
+    mods: modNames.map((name) => ({ name, hash: '', isOutdated: false })),
     defaultOrder: [],
     alreadyResolved,
   };
@@ -39,6 +45,22 @@ describe('computeConflictSignature', () => {
 
   it('differs when the conflict set differs', () => {
     expect(computeConflictSignature([conflict('a.ws')])).not.toBe(computeConflictSignature([conflict('a.ws'), conflict('b.ws')]));
+  });
+
+  it('differs when the same relativePath gains a new contributing mod, even though the path set is unchanged', () => {
+    // A relativePath-only signature would miss this: WSM's own scan_conflicts
+    // de-duplicates by relativePath, so the same file staying in the unresolved set
+    // across two scans doesn't mean nothing changed about it - a third mod starting to
+    // touch an already-conflicting file is real, user-relevant information.
+    const before = computeConflictSignature([conflict('a.ws', false, ['modA', 'modB'])]);
+    const after = computeConflictSignature([conflict('a.ws', false, ['modA', 'modB', 'modC'])]);
+    expect(before).not.toBe(after);
+  });
+
+  it('is order-independent in the contributing mod names too', () => {
+    expect(computeConflictSignature([conflict('a.ws', false, ['modB', 'modA'])])).toBe(
+      computeConflictSignature([conflict('a.ws', false, ['modA', 'modB'])]),
+    );
   });
 });
 
@@ -79,6 +101,15 @@ describe('notifyConflictsIfChanged', () => {
 
     notifyConflictsIfChanged(api as never, [conflict('a.ws')]);
     notifyConflictsIfChanged(api as never, [conflict('a.ws'), conflict('b.ws')]);
+
+    expect(api.sendNotification).toHaveBeenCalledTimes(2);
+  });
+
+  it('notifies again when the same relativePath set gains a new contributing mod', () => {
+    const api = fakeApi();
+
+    notifyConflictsIfChanged(api as never, [conflict('a.ws', false, ['modA', 'modB'])]);
+    notifyConflictsIfChanged(api as never, [conflict('a.ws', false, ['modA', 'modB', 'modC'])]);
 
     expect(api.sendNotification).toHaveBeenCalledTimes(2);
   });
@@ -207,6 +238,21 @@ describe('notifyConflictsIfChanged', () => {
       notifyConflictsIfChanged(api as never, [conflict('a.ws')]);
 
       expect(api.sendNotification).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // isModOrDependencyInstallActive is exported (not just used internally by
+  // notifyConflictsIfChanged above) specifically so index.ts's checkForConflictsAfterDeploy
+  // can also call it directly, before ever calling scanWsmConflicts - see index.ts's own
+  // comment and index.test.ts's own test for that pre-check. Exercised directly here too,
+  // since the same-file suppression tests above only cover it indirectly.
+  describe('isModOrDependencyInstallActive (exported directly for index.ts\'s pre-scan check)', () => {
+    it('returns true while a dependency install is in progress', () => {
+      expect(isModOrDependencyInstallActive(fakeApi({ installing_dependencies: ['some-mod-id'] }) as never)).toBe(true);
+    });
+
+    it('returns false when no relevant activity is present', () => {
+      expect(isModOrDependencyInstallActive(fakeApi({}) as never)).toBe(false);
     });
   });
 

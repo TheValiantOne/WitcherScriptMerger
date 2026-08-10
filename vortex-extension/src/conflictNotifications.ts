@@ -17,17 +17,29 @@ export const WSM_CONFLICTS_NOTIFICATION_ID = 'witcherscriptmerger-vortex-conflic
 /**
  * Builds a stable, order-independent signature for a set of conflicts, used to detect
  * whether the *actual* unresolved-conflict set changed since the last check this
- * session (see `notifyConflictsIfChanged` below) - a sorted, `|`-joined list of
- * relative paths is enough: WSM's own `scan_conflicts` already de-duplicates by
- * relative path (`FileIndex/ModFileIndex.cs`'s `GetModFilesFromPaths` folds multiple
- * mods touching the same file into one `ModFile` entry with a `Mods` list), so no two
- * entries in a single scan result can share a `relativePath`.
+ * session (see `notifyConflictsIfChanged` below).
+ *
+ * Deliberately includes each conflict's own contributing mod names, not just its
+ * `relativePath` alone - a per-conflict `relativePath:sortedModNames` entry, the
+ * entries themselves then sorted and newline-joined. `relativePath` alone would miss a
+ * real, user-relevant change: WSM's own `scan_conflicts` de-duplicates by
+ * `relativePath` (`FileIndex/ModFileIndex.cs`'s `GetModFilesFromPaths` folds multiple
+ * mods touching the same file into one `ModFile` entry), so no two entries in a single
+ * scan result share a `relativePath` - but the *set of mods* contributing to that same
+ * `relativePath` can change between two scans (e.g. a third mod starts touching an
+ * already-conflicting file that was never merged), and a `relativePath`-only signature
+ * can't tell that apart from "nothing changed," silently missing the re-notification a
+ * user would want. `|` and `:` are both used as delimiters here, and `\n` to join
+ * entries - none of the three can appear in a Windows file/directory name (`|`, `:`,
+ * and newline are all part of Windows' reserved-character/control-character set), so
+ * there's no realistic way for two genuinely different conflict sets to collide onto
+ * the same signature string.
  */
 export function computeConflictSignature(conflicts: ScanConflictsResult): string {
   return conflicts
-    .map((c) => c.relativePath)
+    .map((c) => `${c.relativePath}:${[...c.mods.map((m) => m.name)].sort().join('|')}`)
     .sort()
-    .join('|');
+    .join('\n');
 }
 
 /**
@@ -64,6 +76,15 @@ function activityEntries(value: unknown): string[] {
  * True while Vortex reports a mod-install or dependency-install operation in progress,
  * per `state.session.base.activity`.
  *
+ * Exported (not just used internally by `notifyConflictsIfChanged` below) so
+ * `index.ts`'s `checkForConflictsAfterDeploy` can also check it *before* calling
+ * `scanWsmConflicts` - avoiding an entirely wasted WSM process spawn during, e.g., a
+ * Collection install that triggers several deploy-per-mod cycles in a row, since
+ * `notifyConflictsIfChanged` would just discard that scan's result anyway. That
+ * pre-check is a pure optimization, not a correctness requirement - this function is
+ * still called again inside `notifyConflictsIfChanged` itself, because activity can
+ * start at any point during the scan that follows a clean pre-check.
+ *
  * The two specific group/id checks below are not a guess at plausible-sounding names -
  * both are confirmed directly against the real, current `Nexus-Mods/Vortex` monorepo
  * source (fetched via `gh api`; see this unit's PR description for exact file paths and
@@ -98,7 +119,7 @@ function activityEntries(value: unknown): string[] {
  *   own task explicitly names "mod-install" alongside "dependency-install", but worth
  *   flagging as the less battle-tested of the two.
  */
-function isModOrDependencyInstallActive(api: types.IExtensionApi): boolean {
+export function isModOrDependencyInstallActive(api: types.IExtensionApi): boolean {
   // api.getState() defaults to IState (its generic parameter's own default), so
   // session.base.activity is real, typed state here, not a hand-rolled shape - the
   // optional chaining is defensive only (a fake `api` in a unit test need not supply

@@ -1,6 +1,6 @@
 import { log, selectors, types } from 'vortex-api';
 import { isWsmToolAcquired, scanWsmConflicts } from './conflictScan';
-import { notifyConflictsIfChanged } from './conflictNotifications';
+import { isModOrDependencyInstallActive, notifyConflictsIfChanged } from './conflictNotifications';
 import { isWitcher3Active, WITCHER3_GAME_ID } from './gating';
 import { ensureWsmToolRegistered } from './toolAcquisition';
 
@@ -108,23 +108,37 @@ function main(context: types.IExtensionContext): boolean {
   // `profileId` alone, which is what actually removes the race rather than just
   // narrowing its window.
   async function checkForConflictsAfterDeploy(profileId: string): Promise<void> {
-    const deployedGameId = selectors.profileById(context.api.getState(), profileId)?.gameId;
-    if (deployedGameId !== WITCHER3_GAME_ID) {
-      return;
-    }
-
-    // isWsmToolAcquired is inside this try, not gating ahead of it: it can now throw
-    // for a non-ENOENT filesystem error (a locked/permission-denied exe path, e.g. an
-    // antivirus scan or a concurrently running WSM process - see conflictScan.ts's own
-    // doc comment), and the onAsync contract this handler must honor forbids a
-    // rejected promise reaching Vortex's own did-deploy dispatch, exactly like a
-    // failure from scanWsmConflicts/notifyConflictsIfChanged below.
+    // The entire body lives inside this one try/catch, including the deployed-game
+    // gate immediately below - onAsync's contract (quoted above) applies to the whole
+    // handler, not just the parts that were already known to be able to throw. A
+    // simple selectors.profileById lookup or api.getState() call is very unlikely to
+    // throw, but there's no reason to leave even a narrow, structurally-identical gap
+    // next to the one just closed for isWsmToolAcquired below.
     try {
+      const deployedGameId = selectors.profileById(context.api.getState(), profileId)?.gameId;
+      if (deployedGameId !== WITCHER3_GAME_ID) {
+        return;
+      }
+
       if (!(await isWsmToolAcquired(context.api))) {
         // Same normal, expected state tryRegisterWsmTool already logs at 'debug' above -
         // no WSM binary acquired yet is not an error worth spawning a doomed process to
         // discover.
         log('debug', 'witcherscriptmerger-vortex: no acquired WSM tool - skipping post-deploy conflict scan');
+        return;
+      }
+
+      if (isModOrDependencyInstallActive(context.api)) {
+        // Purely an optimization, not a correctness requirement - notifyConflictsIfChanged
+        // (conflictNotifications.ts) checks this same condition again on whatever result
+        // would come back anyway, so this isn't the only thing standing between a real
+        // scan and a suppressed notification. What this pre-check buys is not spawning an
+        // entire WSM process in the first place when the answer is already known to be
+        // "discard this result" - worth avoiding specifically because a dependency-install
+        // burst (e.g. installing a Collection) can trigger several deploy-per-mod cycles
+        // in a row, each of which would otherwise spawn and tear down a WSM process for
+        // nothing.
+        log('debug', 'witcherscriptmerger-vortex: mod/dependency install activity in progress - skipping post-deploy conflict scan');
         return;
       }
 
