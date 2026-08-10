@@ -61,6 +61,11 @@ namespace WitcherScriptMerger.Inventory
 		{
 			public List<string> Merged { get; } = new List<string>();
 			public List<string> Skipped { get; } = new List<string>();
+			// Audit notes from FunctionLevelMergeEngine (see DiffPlexMergeEngine.
+			// TryFunctionLevelRescue), each prefixed with the file it belongs to -
+			// empty whenever no conflict in this run needed the function-level
+			// fallback at all, which is the common case.
+			public List<string> FunctionLevelDecisions { get; } = new List<string>();
 		}
 
 		// One file's interactive merge request, extracted by the host project's
@@ -122,6 +127,15 @@ namespace WitcherScriptMerger.Inventory
 
 		bool _bundleChanged;
 		List<Merge> _pendingBundleMerges = new List<Merge>();
+
+		// Drained into HeadlessMergeSummary.FunctionLevelDecisions at the end of
+		// MergeConflictsHeadless. Appended to (not overwritten) right after every
+		// MergeTextHeadless call, since _mergeEngine.LastFunctionLevelDecisions only
+		// reflects the single most recent pairwise MergeHeadless call - a multi-mod
+		// chain can trigger the function-level rescue at more than one step, and each
+		// one's decisions would otherwise be lost the moment the next chain step's
+		// MergeHeadless call resets that property back to empty.
+		List<string> _functionLevelDecisions = new List<string>();
 
 		// Anchored at BOTH ends ("^...$") - see IsVanillaDlcBundleFolder's own comment
 		// below for why this matters: it's matched against just the extracted folder-name
@@ -534,6 +548,8 @@ namespace WitcherScriptMerger.Inventory
 				}
 			}
 
+			summary.FunctionLevelDecisions.AddRange(_functionLevelDecisions);
+
 			CleanUpTempFiles();
 			CleanUpEmptyDirectories();
 
@@ -571,15 +587,28 @@ namespace WitcherScriptMerger.Inventory
 
 			_vanillaFile = new FileInfo(conflict.GetVanillaFile());
 
+			// Tracked locally, independent of merge.Mods (which can carry stale entries
+			// from a previous run when merge is a re-merge pulled from _inventory.Merges
+			// rather than freshly created) - this is only ever the real mod names folded
+			// into source1 so far within THIS chain, for FunctionLevelMergeEngine's
+			// Decisions[] audit text (see DiffPlexMergeEngine.TryFunctionLevelRescue's
+			// own comment on why source1.Name alone is misleading past the first step).
+			var accumulatedModNames = new List<string> { orderedNames[0] };
+
 			for (int i = 1; i < orderedNames.Length; ++i)
 			{
 				var hash = conflict.Mods.First(h => h.Name.EqualsIgnoreCase(orderedNames[i]));
 				var source2 = MergeSource.FromFlatFile(new FileInfo(conflict.GetModFile(orderedNames[i])), hash);
 
-				var mergedFile = MergeTextHeadless(merge, source1, source2, dryRun);
+				var oldDescription = accumulatedModNames.Count > 1
+					? "accumulated merge (" + string.Join(", ", accumulatedModNames) + ")"
+					: accumulatedModNames[0];
+
+				var mergedFile = MergeTextHeadless(merge, source1, source2, dryRun, oldDescription, orderedNames[i]);
 				if (mergedFile == null)
 					return false;
 				source1 = MergeSource.FromFlatFile(mergedFile, null);
+				accumulatedModNames.Add(orderedNames[i]);
 			}
 			return true;
 		}
@@ -700,7 +729,7 @@ namespace WitcherScriptMerger.Inventory
 				.ToArray();
 		}
 
-		FileInfo MergeTextHeadless(Merge merge, MergeSource source1, MergeSource source2, bool dryRun)
+		FileInfo MergeTextHeadless(Merge merge, MergeSource source1, MergeSource source2, bool dryRun, string oldDescription = null, string newDescription = null)
 		{
 			ProgressInfo.CurrentAction = $"Merging {source1.Name} && {source2.Name}";
 
@@ -711,7 +740,15 @@ namespace WitcherScriptMerger.Inventory
 			// this, MergeConflictsHeadless(dryRun: true) against a mods folder with N
 			// genuine conflicts would pop open N editor windows - a real bug caught in
 			// review before it shipped (see docs/decisions/kdiff3-retirement.md).
-			var result = _mergeEngine.MergeHeadless(source1, source2, _vanillaFile, _outputPath, openConflictMarkers: !dryRun);
+			var result = _mergeEngine.MergeHeadless(
+				source1, source2, _vanillaFile, _outputPath, openConflictMarkers: !dryRun,
+				oldDescription: oldDescription, newDescription: newDescription);
+
+			if (_mergeEngine.LastFunctionLevelDecisions.Count > 0)
+			{
+				foreach (var decision in _mergeEngine.LastFunctionLevelDecisions)
+					_functionLevelDecisions.Add(merge.RelativePath + ": " + decision);
+			}
 
 			if (result != MergeEngineResult.AutoSolved)
 				return null;

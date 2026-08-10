@@ -20,6 +20,19 @@ does.
   `MergeHeadless_EncodingMismatch_...` fixture reproducing the `baseEffect.ws`-style false
   conflict that motivated it.
 - `Tools/HasherTests.cs` — `Hasher`'s xxHash32 output, including synthetic edge cases.
+- `Tools/ScriptUnitExtractorTests.cs` — `ScriptUnitExtractor`'s function-level merge
+  splitter: round-trip fidelity (`Reassemble(Extract(x)) == x`) across annotations,
+  forward declarations, nested control-flow braces, string/comment-embedded braces, and
+  `ExtractionException` on malformed input — see Core's `CLAUDE.md`'s "Function-level
+  merge engine" section.
+- `Tools/UnitAlignerTests.cs` — `UnitAligner`'s vanilla-vs-one-side LCS alignment:
+  matches, insertions, deletions, and both at once.
+- `Tools/FunctionLevelMergeEngineTests.cs` — `FunctionLevelMergeEngine.TryMerge`: every
+  one-sided shortcut, a genuine collision resolved by `BuildMerge`, the
+  most-distinct-from-vanilla tiebreak (including its deterministic tie-break and a
+  scaled-down `DiffAlgorithmException` case), edit-survives-competing-deletion, insertion
+  reconciliation (including the same-name-different-body decline case), and gap-comment
+  detection.
 - `Inventory/FileMergerTests.cs` — `FileMerger.IsVanillaDlcBundleFolder`: known vanilla
   DLC-folder names, case-insensitivity, and non-matches (including anchoring) — see
   Core's `CLAUDE.md`'s "Vortex-fork parity fixes" section. Also covers the two-arg

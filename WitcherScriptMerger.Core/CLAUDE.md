@@ -27,7 +27,9 @@ still external dependencies rather than an in-process replacement.
   (UTF-16LE+BOM normalization — see "Text-merge input encoding" below),
   `DiffPlexMergeEngine.cs` (see below), `FileOpener.cs` (portable "open in the OS's
   default associated app" helper; the only call site is
-  `DiffPlexMergeEngine.MergeHeadless`, opening a genuine conflict's marker sidecar).
+  `DiffPlexMergeEngine.MergeHeadless`, opening a genuine conflict's marker sidecar),
+  `ScriptUnitExtractor.cs`/`UnitAligner.cs`/`FunctionLevelMergeEngine.cs` (the
+  function-level merge fallback — see "Function-level merge engine" below).
 - `Cli/` — `MergeOperations.cs`: the scan-then-merge sequence shared by both hosts'
   `merge` CLI verb and by the MCP tools (see "CLI & MCP orchestration" below).
 - `Mcp/` — `WsmMcpTools.cs`: the MCP server's tool implementations (see below and
@@ -374,6 +376,87 @@ retiring KDiff3 was a deliberate tradeoff, not a strict improvement — see
 switching chunkers** — the bug reproduces under DiffPlex's own default/tested
 `LineChunker` too, just at a somewhat lower rate, so switching would trade a real,
 working byte-for-byte line-ending-preservation property for no actual safety gain.
+
+## Function-level merge engine
+
+`Tools/ScriptUnitExtractor.cs`, `Tools/UnitAligner.cs`, and
+`Tools/FunctionLevelMergeEngine.cs` are a **fallback**, activated only from inside
+`DiffPlexMergeEngine.MergeHeadless` at the two points where the whole-file merge has
+already failed for a given pairwise chain step (the `DiffAlgorithmException` catch and
+the `HasConflicts` branch) — never a parallel code path, so every conflict that already
+auto-solves via the whole-file engine is unaffected. The idea: split vanilla and both
+sides of a pairwise merge into individual function/field units, resolve each
+independently, then reassemble — most of a real `.ws` file's line-level "conflict"
+surface comes from whitespace/comment noise around a handful of actually-edited
+functions, not from genuine overlapping logic changes, and per-function merging sidesteps
+that noise entirely (and, as a side effect, mitigates `DiffAlgorithmException`'s
+worse-at-small-inputs failure rate above by attempting DiffPlex's inline 3-way merge at
+function granularity only when both sides changed a given function differently, not on
+the whole file at once).
+
+**Validated empirically before being built, not just unit-tested.** A throwaway
+measurement against a real, live Witcher 3 install's `actor.ws` conflict (vanilla +
+6 real overhaul mods) found only 6 of 395 functions were genuine two-mod collisions
+(both sides edit the same function differently) — confirming per-function decomposition
+was worth building rather than just relocating the same conflict into a smaller,
+statistically more `DiffAlgorithmException`-prone box. A follow-up chain-step replay
+against the same real install's 5 currently-unresolved conflicts found that a
+naively insertion-only alignment (tolerating a mod adding new functions, but declining
+outright the moment any mod deleted a vanilla function) would rescue only 2 of the 5 —
+one real mod in that install deletes several vanilla functions outright, and that
+deletion was found to persist through the merge chain into later steps even where the
+deleting mod isn't a direct input, since an earlier *clean* whole-file merge step
+faithfully propagates a one-sided deletion into the accumulated text. `UnitAligner`
+handles insertions and deletions symmetrically (an LCS alignment of each side's unit
+names against vanilla's) for this reason; final validation against the same 5 real
+files, run against an isolated copy (never the live install directly), got all 5 to
+merge successfully, including `actor.ws` itself.
+
+**Function identity is name-only** (`(scope-free) name`, no parameter signature) —
+confirmed empirically against several large real vanilla files (`actor.ws`, `player.ws`,
+`npc.ws`) that WitcherScript function names don't collide within a file in practice, so
+overload-aware identity wasn't needed.
+
+**Extraction (`ScriptUnitExtractor`)** is a brace/paren-matching tokenizer, not a full
+parser or a binding to the third-party `tree-sitter-witcherscript` grammar — confirmed
+via direct research into WitcherScript's grammar that class/state/struct/enum
+declarations are top-level only (never nested) and the language has no nested
+function-like constructs at all (no lambdas, local functions, or closures), so a
+function body only ever gains brace depth from control flow, never another function
+declaration. That structural simplicity is what makes plain brace/paren counting
+sufficient, as long as it's string/comment-aware (a single masking pass shared by both
+the brace-safe extraction path and the public `StripComments` helper) so a brace or
+paren inside a string literal or comment can never be mistaken for real syntax. Reuses
+`Tools/FileEncoding.cs` for all file I/O — mod files are inconsistently encoded even
+though vanilla is always UTF-16LE+BOM (see "Text-merge input encoding" below), the exact
+same hazard this class's own callers already have to account for.
+
+**Per-function resolution (`FunctionLevelMergeEngine.TryMerge`)** tries cheap one-sided
+shortcuts (unchanged, only-one-side-edited, both-sides-made-the-identical-edit) before
+ever calling `DiffPlexMergeEngine.BuildMerge` — only a function genuinely edited
+differently on both sides reaches a real per-function 3-way merge attempt, falling back
+to a whole-function tiebreak (**most distinct from vanilla wins**, scored via
+`DiffPlex.Differ`'s plain 2-way line diff over comment-stripped, whitespace-ignored text
+— deliberately not the buggy `ThreeWayDiffer`) if that merge attempt itself conflicts or
+throws `DiffAlgorithmException`. A vanilla function deleted on one side and edited on the
+other resolves as **edit wins** (a deletion never silently overrides a surviving edit —
+losing code silently is unrecoverable if the deletion was wrong, keeping an unwanted
+edit is not) — every non-mechanical resolution (a tiebreak, an edit surviving a
+competing deletion, a mod's gap comment not making it into the output) is recorded in a
+`Decisions` audit trail, never applied silently. That trail is threaded all the way out:
+`DiffPlexMergeEngine.LastFunctionLevelDecisions` → `FileMerger`'s
+`HeadlessMergeSummary.FunctionLevelDecisions` → both hosts' CLI output and the MCP
+`merge_conflicts` tool's `functionLevelDecisions` field. Not yet surfaced in the WinForms
+GUI's `MergeReportForm` — a deliberate deferral, not an oversight, since that's UI work
+on the host side rather than engine work here.
+
+**Scope note on non-function content ("gaps"):** a gap is only ever compared, and only
+ever produces a `Decisions` note (never a decline), when it sits between two vanilla
+units both sides kept and neither side inserted anything at that slot — comparison uses
+the same whitespace-tolerant spirit as `IsWhitespaceOnlyDifference` above, deliberately
+NOT comment-stripped (unlike the extraction masking pass) since the whole point is to
+detect when comment *content* differs, not just formatting. Reassembly always keeps
+vanilla's own gap text verbatim regardless.
 
 ## Text-merge input encoding
 
