@@ -8,6 +8,7 @@ using System.Text.RegularExpressions;
 using DiffPlex;
 using DiffPlex.Chunkers;
 using DiffPlex.Model;
+using WitcherScriptMerger.FileIndex;
 using WitcherScriptMerger.Inventory;
 
 namespace WitcherScriptMerger.Tools
@@ -232,7 +233,7 @@ namespace WitcherScriptMerger.Tools
 				// merge even when the whole-file 3-way diff hits this bug. Only
 				// attempted for .ws files - the extractor is WitcherScript-specific and
 				// has no notion of XML structure.
-				if (TryFunctionLevelRescue(baseText, oldText, newText, source1, source2, outputPath, oldDescription, newDescription))
+				if (TryFunctionLevelRescue(baseText, oldText, newText, source1, source2, outputPath, oldDescription, newDescription, openConflictMarkers))
 					return MergeEngineResult.AutoSolved;
 
 				// DiffPlex's own diff algorithm produced output it isn't safe to trust
@@ -270,7 +271,7 @@ namespace WitcherScriptMerger.Tools
 			// FunctionLevelMergeEngine's own comment for why this is a fallback that
 			// only ever activates where the whole-file merge has already failed, never
 			// a parallel code path for merges that would have succeeded anyway.
-			if (TryFunctionLevelRescue(baseText, oldText, newText, source1, source2, outputPath, oldDescription, newDescription))
+			if (TryFunctionLevelRescue(baseText, oldText, newText, source1, source2, outputPath, oldDescription, newDescription, openConflictMarkers))
 				return MergeEngineResult.AutoSolved;
 
 			// Never write conflict markers to outputPath itself: FileMerger's headless
@@ -417,9 +418,13 @@ namespace WitcherScriptMerger.Tools
 		bool TryFunctionLevelRescue(
 			string baseText, string oldText, string newText,
 			FileMerger.MergeSource source1, FileMerger.MergeSource source2, string outputPath,
-			string oldDescription, string newDescription)
+			string oldDescription, string newDescription, bool openConflictMarkers)
 		{
-			if (!Path.GetExtension(outputPath).EqualsIgnoreCase(".ws"))
+			// ModFile.IsScript, not a locally reinvented extension check - the same
+			// vocabulary every other file-category dispatch in Core uses for this exact
+			// question. The extractor is WitcherScript-specific and has no notion of
+			// XML structure, so .xml conflicts never reach it.
+			if (!ModFile.IsScript(outputPath))
 				return false;
 
 			FunctionLevelMergeResult result;
@@ -430,13 +435,28 @@ namespace WitcherScriptMerger.Tools
 					source1.Name, source2.Name,
 					oldDescription ?? source1.Name, newDescription ?? source2.Name);
 			}
-			catch
+			catch (ScriptUnitExtractor.ExtractionException)
 			{
-				// A latent bug in the new engine must never regress this method below
-				// its pre-existing behavior - the caller falls through to whatever it
-				// was already about to do (write a sidecar, or report the
-				// DiffAlgorithmException as-is) exactly as if this rescue attempt had
-				// declined outright.
+				// The one expected, anticipated decline case (FunctionLevelMergeEngine.
+				// TryMerge itself already narrows to this same exception type) -
+				// genuinely just means this input doesn't parse cleanly, not a bug.
+				return false;
+			}
+			catch (Exception ex)
+			{
+				// Anything else is a genuine defect in the new engine, not an
+				// anticipated decline - still can't be allowed to regress this method
+				// below its pre-existing behavior (the caller falls through to
+				// whatever it was already about to do), but silently swallowing it
+				// with zero trace would make such a bug permanently unmeasurable from
+				// field reports alone. DialogIcon.Warning (not Information) so this
+				// routes to stderr under HeadlessMergeNotifier, never stdout - stdout
+				// carries MCP JSON-RPC frames only when running under the mcp verb,
+				// and writing arbitrary text there would corrupt the protocol stream.
+				AppState.Notifier.ShowMessage(
+					$"Function-level merge rescue hit an unexpected error for {source1.Name} + {source2.Name} " +
+					$"({ex.GetType().Name}: {ex.Message}) - falling back to the whole-file result.",
+					"Function-level rescue error", NotifyButtons.OK, DialogIcon.Warning);
 				return false;
 			}
 
@@ -449,10 +469,17 @@ namespace WitcherScriptMerger.Tools
 
 			if (result.Decisions.Count > 0)
 			{
+				// DialogIcon.Warning, not Information - see the unexpected-exception
+				// branch above for why Information (which HeadlessMergeNotifier routes
+				// to stdout) isn't safe here either; this message fires on every
+				// successful rescue with decisions to report, including during a dry
+				// run (openConflictMarkers is false only for the dry-run caller), so
+				// it's reachable far more often than the exception-logging branch.
+				var previewSuffix = openConflictMarkers ? "" : " (dry run preview - nothing was actually written)";
 				AppState.Notifier.ShowMessage(
 					$"Merged {source1.Name} + {source2.Name} at the function level after the whole-file merge " +
-					$"couldn't auto-solve it:\n\n" + string.Join("\n", result.Decisions),
-					"Merged (function-level)", NotifyButtons.OK, DialogIcon.Information);
+					$"couldn't auto-solve it{previewSuffix}:\n\n" + string.Join("\n", result.Decisions),
+					"Merged (function-level)", NotifyButtons.OK, DialogIcon.Warning);
 			}
 
 			return true;
@@ -696,7 +723,11 @@ namespace WitcherScriptMerger.Tools
 			return NormalizeWhitespace(oldPieces) == NormalizeWhitespace(newPieces);
 		}
 
-		static string NormalizeWhitespace(IEnumerable<string> pieces)
+		// Internal, not private: FunctionLevelMergeEngine.NormalizeGap reuses this
+		// directly (a single-element pieces array) rather than keeping its own second
+		// copy of the same regex+trim logic - see that method's own comment for the
+		// real NBSP-related regression duplicating it once already caused.
+		internal static string NormalizeWhitespace(IEnumerable<string> pieces)
 		{
 			// Trim(WhitespaceChars), not the parameterless Trim() - see WhitespaceChars'
 			// own comment for the real NBSP-related bug this guards against.

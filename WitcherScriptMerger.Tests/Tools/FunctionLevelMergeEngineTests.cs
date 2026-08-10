@@ -121,7 +121,7 @@ namespace WitcherScriptMerger.Tests.Tools
 		}
 
 		[Fact]
-		public void TryMerge_DeletedOnOldSideOnly_NewSideAlsoUnchanged_FunctionDroppedNoDecisionNote()
+		public void TryMerge_DeletedOnOldSideOnly_NewSideAlsoUnchanged_FunctionDroppedGapsGetCaveatNotes()
 		{
 			var baseText = Fn("A", "\tx = 1;\r\n") + Fn("B", "\ty = 2;\r\n");
 			var oldText = Fn("B", "\ty = 2;\r\n"); // deleted A entirely, didn't touch B
@@ -131,7 +131,12 @@ namespace WitcherScriptMerger.Tests.Tools
 			Assert.True(result.Applied);
 			Assert.DoesNotContain("function A", result.MergedText);
 			Assert.Contains("function B", result.MergedText);
-			Assert.Empty(result.Decisions);
+			// A's deletion makes both neighboring gap slots (before A, between A and B)
+			// ineligible for precise comparison - each gets a conservative caveat note
+			// rather than silence, since non-function content near a deletion has no
+			// other signal at all (see GetGapEligibility.IneligibleDeletion).
+			Assert.Equal(2, result.Decisions.Count);
+			Assert.All(result.Decisions, d => Assert.Contains("wasn't automatically verified", d));
 		}
 
 		[Fact]
@@ -145,13 +150,16 @@ namespace WitcherScriptMerger.Tests.Tools
 
 			Assert.True(result.Applied);
 			Assert.Contains("x = 99;", result.MergedText);
-			var note = Assert.Single(result.Decisions);
-			Assert.Contains("modB", note);
-			Assert.Contains("deleted", note);
+			var deletionNote = Assert.Single(result.Decisions, d => d.Contains("deleted"));
+			Assert.Contains("modB", deletionNote);
+			// Plus the same two ineligible-deletion caveat notes as the case above -
+			// A's deletion on the old side still makes its neighboring gaps
+			// unverifiable regardless of how the function itself was resolved.
+			Assert.Equal(3, result.Decisions.Count);
 		}
 
 		[Fact]
-		public void TryMerge_DeletedOnBothSides_FunctionDropped()
+		public void TryMerge_DeletedOnBothSides_FunctionDroppedGapsGetCaveatNotes()
 		{
 			var baseText = Fn("A", "\tx = 1;\r\n") + Fn("B", "\ty = 2;\r\n");
 			var bothDeleteA = Fn("B", "\ty = 2;\r\n");
@@ -160,7 +168,23 @@ namespace WitcherScriptMerger.Tests.Tools
 
 			Assert.True(result.Applied);
 			Assert.DoesNotContain("function A", result.MergedText);
-			Assert.Empty(result.Decisions);
+			Assert.Equal(2, result.Decisions.Count);
+			Assert.All(result.Decisions, d => Assert.Contains("wasn't automatically verified", d));
+		}
+
+		[Fact]
+		public void TryMerge_NoDeletionsOrInsertionsAnywhere_NoIneligibleGapCaveatNotes()
+		{
+			// Sanity check for the caveat-note feature itself: a file where nothing is
+			// ever deleted or inserted should never emit an "wasn't automatically
+			// verified" caveat - only real, deletion-adjacent uncertainty should.
+			var baseText = Fn("A", "\tx = 1;\r\n") + Fn("B", "\ty = 2;\r\n");
+			var oldText = Fn("A", "\tx = 9;\r\n") + Fn("B", "\ty = 2;\r\n");
+
+			var result = Merge(baseText, oldText, baseText);
+
+			Assert.True(result.Applied);
+			Assert.DoesNotContain(result.Decisions, d => d.Contains("wasn't automatically verified"));
 		}
 
 		[Fact]
@@ -194,6 +218,41 @@ namespace WitcherScriptMerger.Tests.Tools
 			var baseText = Fn("A", "\tx = 1;\r\n");
 			var oldText = Fn("A", "\tx = 1;\r\n") + Fn("NewFunc", "\tz = 1;\r\n");
 			var newText = Fn("A", "\tx = 1;\r\n") + Fn("NewFunc", "\tz = 2;\r\n"); // same name, different body
+
+			var result = Merge(baseText, oldText, newText);
+
+			Assert.False(result.Applied);
+		}
+
+		[Fact]
+		public void TryMerge_DuplicateNamedInsertionsOnOneSide_DeclinesRatherThanThrowing()
+		{
+			// Two insertions with the SAME name on one side (e.g. a mod's own
+			// copy-paste mistake) used to throw from ReconcileInsertions's
+			// ToDictionary call - regression test for that crash (caught upstream by
+			// DiffPlexMergeEngine.TryFunctionLevelRescue's bare catch, but this engine
+			// should decline cleanly on its own, not rely on a caller's safety net).
+			var baseText = Fn("A", "\tx = 1;\r\n");
+			var oldText = Fn("A", "\tx = 1;\r\n") + Fn("Dup", "\ty = 1;\r\n") + Fn("Dup", "\ty = 2;\r\n");
+
+			var result = Merge(baseText, oldText, baseText);
+
+			Assert.False(result.Applied);
+		}
+
+		[Fact]
+		public void TryMerge_VanillaHasNoExtractedUnitsAtAll_DeclinesRatherThanDiscardingBothEdits()
+		{
+			// A file with zero functions/@addField fields (e.g. only top-level
+			// consts/enums) has nothing for a FUNCTION-level engine to offer - the
+			// whole document is one gap, and reverting a whole file's real,
+			// substantive edits to vanilla while reporting it as a successful
+			// AutoSolved merge would be a materially worse outcome than declining.
+			// Also a regression test for a real crash this case used to trigger
+			// (GetSideGapIndex indexing MatchedSideIndex[-1] on an empty array).
+			var baseText = "const X = 1;\r\n";
+			var oldText = "const X = 2;\r\n";
+			var newText = "const X = 3;\r\n";
 
 			var result = Merge(baseText, oldText, newText);
 
