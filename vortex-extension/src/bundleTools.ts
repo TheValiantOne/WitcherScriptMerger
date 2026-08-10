@@ -62,7 +62,7 @@ export interface DetectedBundleTools {
   wccLitePath?: string;
 }
 
-function isEnoent(err: unknown): boolean {
+export function isEnoent(err: unknown): boolean {
   return typeof err === 'object' && err !== null && (err as NodeJS.ErrnoException).code === 'ENOENT';
 }
 
@@ -70,10 +70,11 @@ function isEnoent(err: unknown): boolean {
  *  rethrowing anything other than ENOENT - a permission/lock error must not be
  *  silently treated as "not installed", which would both hide the real problem and
  *  risk offering to re-download/re-extract a tool that's actually already present).
- *  Duplicated rather than imported since `toolAcquisition.ts` doesn't export it and
- *  this unit's own instructions treat that file's *existing* logic as off-limits to
- *  modify. */
-async function fileExists(target: string): Promise<boolean> {
+ *  Not imported from `toolAcquisition.ts` since that file doesn't export it and this
+ *  unit's own instructions treat that file's *existing* logic as off-limits to modify -
+ *  but exported from here (unlike that file's private copy) specifically so
+ *  `wsmStatusSummary.ts` can reuse *this* one instead of adding a third duplicate. */
+export async function fileExists(target: string): Promise<boolean> {
   try {
     await fs.promises.access(target);
     return true;
@@ -92,7 +93,22 @@ async function fileExists(target: string): Promise<boolean> {
  * is examined at all, so a shallower match always wins over a deeper one regardless of
  * sibling-directory iteration order (which `fs.readdir` does not guarantee is
  * alphabetical). Returns `undefined` (rather than throwing) when `rootDir` doesn't
- * exist yet or nothing matches within `maxDepth` levels.
+ * exist yet (or a subdirectory disappears mid-search - a benign race, not a real
+ * problem) or nothing matches within `maxDepth` levels. Any *other* `readdir` failure
+ * (EACCES/EPERM/EBUSY - e.g. an antivirus lock on a freshly-extracted tree) propagates
+ * rather than being silently treated as "nothing here": a caller like
+ * `wccLiteAcquisition.ts` that gets a false "not found" from a transient error, rather
+ * than a real one, could go on to wipe and re-download a perfectly good install (see
+ * that module's own `fs.promises.rm` call after this function reports no existing
+ * install).
+ *
+ * When more than one match exists at the same (shallowest) depth level, prefers a path
+ * containing an `x64` path segment - this repo's own `App.config` default
+ * (`Tools\wcc_lite\bin\x64\wcc_lite.exe`) specifically targets the x64 build, and a
+ * general-purpose Witcher 3 modding-tools archive could plausibly ship both x86 and
+ * x64 builds side by side at the same depth, where directory-listing order alone
+ * (`fs.readdir` gives no ordering guarantee) would otherwise pick between them
+ * arbitrarily.
  */
 export async function findFileByNameBounded(
   rootDir: string,
@@ -104,25 +120,31 @@ export async function findFileByNameBounded(
 
   for (let depth = 0; depth <= maxDepth && currentLevelDirs.length > 0; depth++) {
     const nextLevelDirs: string[] = [];
+    const matchesAtThisLevel: string[] = [];
 
     for (const dir of currentLevelDirs) {
       let entries: fs.Dirent[];
       try {
         entries = await fs.promises.readdir(dir, { withFileTypes: true });
-      } catch {
-        continue;
-      }
-
-      const match = entries.find((entry) => entry.isFile() && entry.name.toLowerCase() === targetLower);
-      if (match) {
-        return path.join(dir, match.name);
+      } catch (err) {
+        if (isEnoent(err)) {
+          continue;
+        }
+        throw err;
       }
 
       for (const entry of entries) {
-        if (entry.isDirectory()) {
+        if (entry.isFile() && entry.name.toLowerCase() === targetLower) {
+          matchesAtThisLevel.push(path.join(dir, entry.name));
+        } else if (entry.isDirectory()) {
           nextLevelDirs.push(path.join(dir, entry.name));
         }
       }
+    }
+
+    if (matchesAtThisLevel.length > 0) {
+      const x64Match = matchesAtThisLevel.find((match) => /(^|[\\/])x64([\\/]|$)/i.test(match));
+      return x64Match ?? matchesAtThisLevel[0];
     }
 
     currentLevelDirs = nextLevelDirs;

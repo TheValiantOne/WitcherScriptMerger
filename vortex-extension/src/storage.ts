@@ -57,7 +57,8 @@ export function getDownloadCacheDir(api: types.IExtensionApi): string {
   return path.join(getExtensionStorageDir(api), DOWNLOAD_CACHE_SUBDIR);
 }
 
-/** See this module's own doc comment above - convention for a later unit, unused here. */
+/** See this module's own doc comment above - QuickBMS/wcc_lite land under here (used by
+ *  `bundleTools.ts`'s detection and `wccLiteAcquisition.ts`'s auto-download). */
 export function getBundleToolsDir(api: types.IExtensionApi): string {
   return path.join(getExtensionStorageDir(api), BUNDLE_TOOLS_SUBDIR);
 }

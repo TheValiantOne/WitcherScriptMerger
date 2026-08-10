@@ -126,4 +126,18 @@ describe('acquireWccLite', () => {
       /no 'wcc_lite\.exe' was found/,
     );
   });
+
+  it('names the exact mod/file id tried in the "not found" error, for diagnosing a wrong-file-selected problem separately from an archive-layout mismatch', async () => {
+    const api = fakeApi(userDataDir);
+    const downloader = fakeDownloaderReturning(path.join(userDataDir, 'modkit.zip'));
+    const noOpExtractor: ArchiveExtractor = {
+      extractAll: async (_archivePath, destDir) => {
+        await fs.promises.mkdir(destDir, { recursive: true });
+      },
+    };
+
+    await expect(
+      acquireWccLite({ api, downloader, extractor: noOpExtractor, fileId: 98765 }),
+    ).rejects.toThrow(new RegExp(`mod ${WCC_LITE_NEXUS_MOD_ID} file 98765`));
+  });
 });

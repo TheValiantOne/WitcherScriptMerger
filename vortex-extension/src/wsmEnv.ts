@@ -29,6 +29,19 @@ export interface WsmEnvConfig {
    * `getBundleToolsDir` doc comment for the storage convention these three paths come
    * from, and `wccLiteAcquisition.ts` for wcc_lite's own auto-download path (QuickBMS
    * is detection-only - never auto-downloaded, see that module's own doc comment).
+   *
+   * **Not universally populated yet - only `wsmStatusSummary.ts`'s own ephemeral,
+   * dashlet-only `WsmMcpClient` spawn builds its env this way today.** The WSM instance
+   * a user actually launches from Vortex's Tools dashboard is registered by
+   * `toolAcquisition.ts`'s `registerAcquiredTool`, which builds its `environment` via
+   * `buildWsmEnv({ gameDirectory })` only (no bundle-tool paths) - that file's *existing*
+   * logic is off-limits for this unit to modify (see this unit's own task
+   * instructions), so a "Bundle tooling ready: Yes" the status tile reports describes
+   * only the tile's own status-check spawn, not (yet) the Tools-dashboard-launched
+   * process, which still falls back to on-disk `.dll.config`/`.exe.config` defaults for
+   * these three settings specifically. A later unit wiring bundle-content merges should
+   * close this gap by having whatever spawns *that* process call `detectBundleTools`
+   * too.
    */
   quickBmsPath?: string;
   quickBmsPluginPath?: string;

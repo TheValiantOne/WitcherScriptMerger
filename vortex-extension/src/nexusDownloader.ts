@@ -102,12 +102,19 @@ async function waitForDownloadToFinish(
   timeoutMs: number,
 ): Promise<DownloadStateLike> {
   const deadline = Date.now() + timeoutMs;
+  // Surfaced in the timeout error message below - 'paused' (a user-initiated pause
+  // from Vortex's own Downloads pane, a real reachable `DownloadState` per
+  // `lib/api.d.ts`) left sitting until the deadline would otherwise produce the exact
+  // same generic "did not finish" message as a download that's merely slow, giving the
+  // user no hint that *they* paused it and need to resume it themselves.
+  let lastObservedState: string | undefined;
 
   for (;;) {
     const state = api.getState() as {
       persistent?: { downloads?: { files?: Record<string, DownloadStateLike> } };
     };
     const download = state.persistent?.downloads?.files?.[downloadId];
+    lastObservedState = download?.state;
 
     if (download?.state === 'finished') {
       return download;
@@ -121,7 +128,9 @@ async function waitForDownloadToFinish(
     // keep polling rather than treating it as success or failure.
 
     if (Date.now() >= deadline) {
-      throw new Error(`Nexus download '${downloadId}' did not finish within ${timeoutMs}ms.`);
+      const stateNote =
+        lastObservedState !== undefined ? ` (last observed state: '${lastObservedState}')` : ' (never observed in downloads state)';
+      throw new Error(`Nexus download '${downloadId}' did not finish within ${timeoutMs}ms${stateNote}.`);
     }
 
     await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));

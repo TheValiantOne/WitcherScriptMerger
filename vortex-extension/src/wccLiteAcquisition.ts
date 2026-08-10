@@ -78,6 +78,17 @@ interface NexusFileInfoLike {
   is_primary?: boolean;
 }
 
+/**
+ * Picks Nexus's own `is_primary`-flagged file, falling back to the first listed file
+ * if nothing is marked primary (a mod page state that's possible, if unusual). That
+ * fallback is a best-effort heuristic, not a guarantee of picking the *current*
+ * release - a mod page listing an old/archived version alongside the current one with
+ * nothing marked primary could pick the wrong one. If the resulting download's archive
+ * doesn't contain `wcc_lite.exe`, `acquireWccLiteUncoordinated`'s own error message
+ * names exactly which mod/file id was tried, specifically so that failure mode is
+ * distinguishable from a genuine archive-layout mismatch rather than silently
+ * conflated with it.
+ */
 async function resolveFileId(
   api: types.IExtensionApi,
   explicitFileId: number | undefined,
@@ -165,10 +176,11 @@ async function acquireWccLiteUncoordinated(options: AcquireWccLiteOptions, extra
   const exePath = await findFileByNameBounded(extractDir, WCC_LITE_EXE_FILENAME, BUNDLE_TOOL_SEARCH_MAX_DEPTH);
   if (!exePath) {
     throw new Error(
-      `Downloaded and extracted the wcc_lite Nexus mod file into '${extractDir}' but no ` +
-        `'${WCC_LITE_EXE_FILENAME}' was found there (searched up to ${BUNDLE_TOOL_SEARCH_MAX_DEPTH} directory ` +
-        "levels deep). The mod's internal layout may not match what this extension expects - see this unit's " +
-        'PR description for the "archive-layout caveat".',
+      `Downloaded Nexus mod ${WCC_LITE_NEXUS_MOD_ID} file ${fileId}${fileName ? ` ('${fileName}')` : ''} and ` +
+        `extracted it into '${extractDir}' but no '${WCC_LITE_EXE_FILENAME}' was found there (searched up to ` +
+        `${BUNDLE_TOOL_SEARCH_MAX_DEPTH} directory levels deep). Naming the exact file tried here so this is ` +
+        "distinguishable from a wrong-file-selected problem (see resolveFileId's own doc comment) versus a " +
+        'genuine archive-layout mismatch (see this unit\'s PR description for the "archive-layout caveat").',
     );
   }
 

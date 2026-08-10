@@ -106,6 +106,21 @@ describe('createVortexNexusDownloader', () => {
     await assertion;
   });
 
+  it('includes the last observed download state in the timeout error, so a paused download reads as paused rather than generically slow', async () => {
+    const downloads: Record<string, FakeDownloadEntry> = {
+      'download-1': { state: 'paused' },
+    };
+    const nexusDownload = vi.fn(async () => 'download-1');
+    const api = fakeApi({ nexusDownload, downloads });
+
+    const downloader = createVortexNexusDownloader(api, { pollIntervalMs: 1000, downloadTimeoutMs: 3000 });
+    const resultPromise = downloader.downloadModFile({ gameId: 'witcher3', modId: 3173, fileId: 42 });
+    const assertion = expect(resultPromise).rejects.toThrow(/last observed state: 'paused'/);
+
+    await vi.advanceTimersByTimeAsync(5000);
+    await assertion;
+  });
+
   it('treats an entry not yet present in downloads state as still in progress, not a failure', async () => {
     const downloads: Record<string, FakeDownloadEntry> = {};
     const nexusDownload = vi.fn(async () => 'download-1');

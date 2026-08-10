@@ -1,7 +1,6 @@
-import * as fs from 'fs';
 import * as path from 'path';
 import { selectors, types } from 'vortex-api';
-import { DetectedBundleTools, detectBundleTools } from './bundleTools';
+import { DetectedBundleTools, detectBundleTools, fileExists } from './bundleTools';
 import { WITCHER3_GAME_ID } from './gating';
 import { GetStatusResult, WsmMcpClient } from './mcpClient';
 import { getWsmToolDir } from './storage';
@@ -29,25 +28,6 @@ export interface GetWsmStatusSummaryOptions {
   connect?: typeof WsmMcpClient.connect;
 }
 
-function isEnoent(err: unknown): boolean {
-  return typeof err === 'object' && err !== null && (err as NodeJS.ErrnoException).code === 'ENOENT';
-}
-
-/** Mirrors `toolAcquisition.ts`'s own `pathExists` / `bundleTools.ts`'s own
- *  `fileExists` - see either's doc comment for why a non-ENOENT error must propagate
- *  rather than being treated as "not acquired". */
-async function fileExists(target: string): Promise<boolean> {
-  try {
-    await fs.promises.access(target);
-    return true;
-  } catch (err) {
-    if (isEnoent(err)) {
-      return false;
-    }
-    throw err;
-  }
-}
-
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
@@ -71,15 +51,29 @@ export async function getWsmStatusSummary(
   options: GetWsmStatusSummaryOptions = {},
 ): Promise<WsmStatusSummary> {
   const exePath = path.join(getWsmToolDir(api), WSM_HEADLESS_EXE_NAME);
-  if (!(await fileExists(exePath))) {
-    return { kind: 'not-acquired' };
+
+  let bundleTools: DetectedBundleTools;
+  let env: NodeJS.ProcessEnv;
+  try {
+    if (!(await fileExists(exePath))) {
+      return { kind: 'not-acquired' };
+    }
+
+    bundleTools = await detectBundleTools(api);
+    const gameDirectory = selectors.discoveryByGame(api.getState(), WITCHER3_GAME_ID)?.path;
+
+    const envConfig: WsmEnvConfig = { gameDirectory, ...bundleTools };
+    env = mergeWithProcessEnv(buildWsmEnv(envConfig));
+  } catch (err) {
+    // Covers fileExists/detectBundleTools above - this function's own doc comment
+    // promises every caller a WsmStatusSummary, `not-acquired` vs `error` for every
+    // *other* failure; without this, a permission/lock error scanning
+    // getBundleToolsDir(api) (e.g. an AV lock on a freshly-extracted wcc_lite tree)
+    // would surface as an unhandled rejection instead of the documented contract -
+    // currently masked only because this module's sole wired-up caller
+    // (statusTile.ts's own refresh()) happens to add its own .catch() on top.
+    return { kind: 'error', message: errorMessage(err) };
   }
-
-  const bundleTools = await detectBundleTools(api);
-  const gameDirectory = selectors.discoveryByGame(api.getState(), WITCHER3_GAME_ID)?.path;
-
-  const envConfig: WsmEnvConfig = { gameDirectory, ...bundleTools };
-  const env = mergeWithProcessEnv(buildWsmEnv(envConfig));
 
   const connect = options.connect ?? WsmMcpClient.connect;
 

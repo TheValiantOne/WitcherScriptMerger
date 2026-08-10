@@ -87,6 +87,40 @@ export function WsmStatusDashletContent(props: WsmStatusDashletProps): React.Rea
   const [wccLiteError, setWccLiteError] = React.useState<string | undefined>(undefined);
   const [fetchingWccLite, setFetchingWccLite] = React.useState<boolean>(false);
 
+  // Guards every state setter below against firing after unmount. This dashlet's own
+  // visibility (registerWsmStatusDashlet's isVisible, below) is tied to a *live*
+  // game-mode switch, so a user can switch away from Witcher 3 - unmounting this
+  // component - while a wcc_lite download (up to DEFAULT_DOWNLOAD_TIMEOUT_MS, 10
+  // minutes, see nexusDownloader.ts) or a status refresh is still in flight; without
+  // this, that promise's eventual .then/.catch/.finally would call setState on an
+  // already-unmounted component.
+  const mountedRef = React.useRef(true);
+  React.useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+  const setSummaryIfMounted = React.useCallback((value: WsmStatusSummary) => {
+    if (mountedRef.current) {
+      setSummary(value);
+    }
+  }, []);
+  const setLoadingIfMounted = React.useCallback((value: boolean) => {
+    if (mountedRef.current) {
+      setLoading(value);
+    }
+  }, []);
+  const setWccLiteErrorIfMounted = React.useCallback((value: string | undefined) => {
+    if (mountedRef.current) {
+      setWccLiteError(value);
+    }
+  }, []);
+  const setFetchingWccLiteIfMounted = React.useCallback((value: boolean) => {
+    if (mountedRef.current) {
+      setFetchingWccLite(value);
+    }
+  }, []);
+
   // Combined "something is in flight" flag, used to disable *both* buttons regardless
   // of which action started it - without this, clicking "Refresh" while "Get wcc_lite"
   // is still running (or vice versa) could fire two overlapping WSM process
@@ -99,29 +133,29 @@ export function WsmStatusDashletContent(props: WsmStatusDashletProps): React.Rea
   // label would revert to idle as soon as refresh() was merely *invoked*, not once the
   // new status (a full WSM process spawn + MCP handshake) actually finished loading.
   const refresh = React.useCallback((): Promise<void> => {
-    setLoading(true);
+    setLoadingIfMounted(true);
     // A refresh is a "start over" action - any stale wcc_lite-download error from a
     // previous attempt shouldn't keep rendering once the user has asked for a fresh
     // status check (e.g. after installing wcc_lite by hand and clicking Refresh).
-    setWccLiteError(undefined);
+    setWccLiteErrorIfMounted(undefined);
     return getWsmStatusSummary(api)
-      .then((result) => setSummary(result))
-      .catch((err: unknown) => setSummary({ kind: 'error', message: err instanceof Error ? err.message : String(err) }))
-      .finally(() => setLoading(false));
-  }, [api]);
+      .then((result) => setSummaryIfMounted(result))
+      .catch((err: unknown) => setSummaryIfMounted({ kind: 'error', message: err instanceof Error ? err.message : String(err) }))
+      .finally(() => setLoadingIfMounted(false));
+  }, [api, setLoadingIfMounted, setSummaryIfMounted, setWccLiteErrorIfMounted]);
 
   React.useEffect(() => {
     refresh();
   }, [refresh]);
 
   const handleGetWccLite = React.useCallback(() => {
-    setFetchingWccLite(true);
-    setWccLiteError(undefined);
+    setFetchingWccLiteIfMounted(true);
+    setWccLiteErrorIfMounted(undefined);
     acquireWccLite({ api })
       .then(() => refresh())
-      .catch((err: unknown) => setWccLiteError(err instanceof Error ? err.message : String(err)))
-      .finally(() => setFetchingWccLite(false));
-  }, [api, refresh]);
+      .catch((err: unknown) => setWccLiteErrorIfMounted(err instanceof Error ? err.message : String(err)))
+      .finally(() => setFetchingWccLiteIfMounted(false));
+  }, [api, refresh, setFetchingWccLiteIfMounted, setWccLiteErrorIfMounted]);
 
   const children: React.ReactNode[] = [
     React.createElement('h4', { key: 'title', style: { marginTop: 0 } }, 'WitcherScriptMerger Status'),

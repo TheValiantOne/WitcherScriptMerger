@@ -124,18 +124,25 @@ describe('main (index.ts)', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
 
-  it('registers the WSM status dashlet once, at context.once time, regardless of the active game', () => {
-    // Unlike tryRegisterWsmTool, this registration isn't gated on isWitcher3Active here
-    // - statusTile.ts's own registerDashlet call supplies a live isVisible callback
-    // instead (covered by statusTile.test.ts), so index.ts always registers it once.
+  it('registers the WSM status dashlet synchronously inside main() itself, not deferred into context.once', () => {
+    // Per @nexusmods/vortex-api's own lib/api.d.ts doc comment on IExtensionContext:
+    // register functions "must be called immediately inside the init function," and
+    // once is documented as being for extension setup "except for the register calls."
+    // An earlier version of this test (and of index.ts itself) got this backwards -
+    // asserting registerWsmStatusDashlet only fired after fireOnce() - which would have
+    // meant the dashlet's registerDashlet call never actually took effect against a
+    // real Vortex host. This test now asserts the call happens from main(context)
+    // alone, with context.once never fired at all.
     ensureWsmToolRegisteredMock.mockClear().mockResolvedValue(false);
     registerWsmStatusDashletMock.mockClear();
-    const { context, fireOnce } = fakeContext('skyrimse');
+    const { context } = fakeContext('skyrimse');
 
     main(context);
-    fireOnce();
 
     expect(registerWsmStatusDashletMock).toHaveBeenCalledTimes(1);
     expect(registerWsmStatusDashletMock).toHaveBeenCalledWith(context);
+    // Still isn't gated on isWitcher3Active - statusTile.ts's own registerDashlet call
+    // supplies a live isVisible callback instead (covered by statusTile.test.ts).
+    expect(ensureWsmToolRegisteredMock).not.toHaveBeenCalled();
   });
 });

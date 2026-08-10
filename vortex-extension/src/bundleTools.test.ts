@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { detectBundleTools, detectQuickBms, detectWccLite, findFileByNameBounded } from './bundleTools';
 
 function fakeApi(userDataDir: string, discoveryByGameState: Record<string, { tools?: Record<string, { path?: string }> }> = {}) {
@@ -227,6 +227,34 @@ describe('bundleTools', () => {
 
       const found = await findFileByNameBounded(userDataDir, 'wcc_lite.exe', 6);
       expect(found).toBe(path.join(shallowDir, 'WCC_LITE.EXE'));
+    });
+
+    it('prefers a match under an x64 path segment when multiple matches exist at the same depth', async () => {
+      // Simulates a general-purpose modding-tools archive shipping both x86 and x64
+      // builds side by side - this repo's own App.config default specifically wants
+      // the x64 one (Tools\wcc_lite\bin\x64\wcc_lite.exe).
+      const x86Dir = path.join(userDataDir, 'bin', 'x86');
+      const x64Dir = path.join(userDataDir, 'bin', 'x64');
+      fs.mkdirSync(x86Dir, { recursive: true });
+      fs.mkdirSync(x64Dir, { recursive: true });
+      fs.writeFileSync(path.join(x86Dir, 'wcc_lite.exe'), 'x86 build', 'utf8');
+      fs.writeFileSync(path.join(x64Dir, 'wcc_lite.exe'), 'x64 build', 'utf8');
+
+      const found = await findFileByNameBounded(userDataDir, 'wcc_lite.exe', 6);
+      expect(found).toBe(path.join(x64Dir, 'wcc_lite.exe'));
+    });
+
+    it('propagates a non-ENOENT readdir error rather than silently treating it as "nothing here"', async () => {
+      const targetDir = path.join(userDataDir, 'locked');
+      fs.mkdirSync(targetDir, { recursive: true });
+      const permissionError = Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+      const readdirSpy = vi.spyOn(fs.promises, 'readdir').mockRejectedValueOnce(permissionError);
+
+      try {
+        await expect(findFileByNameBounded(targetDir, 'wcc_lite.exe', 6)).rejects.toThrow(/EACCES/);
+      } finally {
+        readdirSpy.mockRestore();
+      }
     });
   });
 });
