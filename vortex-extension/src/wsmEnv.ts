@@ -25,10 +25,10 @@ export interface WsmEnvConfig {
   modsDirectory?: string;
   mergedModName?: string;
   /**
-   * Not consumed by anything in this unit (bundle-tooling acquisition hasn't landed
-   * yet - see `storage.ts`'s `getBundleToolsDir` doc comment for the storage
-   * convention a later unit should use to produce these three paths). Accepted here
-   * now so that later unit only has to supply values, not invent the env-var mapping.
+   * Populated from `bundleTools.ts`'s `detectBundleTools(api)` - see `storage.ts`'s
+   * `getBundleToolsDir` doc comment for the storage convention these three paths come
+   * from, and `wccLiteAcquisition.ts` for wcc_lite's own auto-download path (QuickBMS
+   * is detection-only - never auto-downloaded, see that module's own doc comment).
    */
   quickBmsPath?: string;
   quickBmsPluginPath?: string;

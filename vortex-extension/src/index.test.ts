@@ -4,12 +4,20 @@ import { describe, expect, it, vi } from 'vitest';
 // from `vi.hoisted` rather than an ordinary outer-scope `const` - this isolates index.ts's
 // own wiring (what this file actually tests) from toolAcquisition.ts's real behavior
 // (already thoroughly covered by toolAcquisition.test.ts).
-const { ensureWsmToolRegisteredMock } = vi.hoisted(() => ({
+const { ensureWsmToolRegisteredMock, registerWsmStatusDashletMock } = vi.hoisted(() => ({
   ensureWsmToolRegisteredMock: vi.fn(),
+  registerWsmStatusDashletMock: vi.fn(),
 }));
 
 vi.mock('./toolAcquisition', () => ({
   ensureWsmToolRegistered: ensureWsmToolRegisteredMock,
+}));
+
+// Mocked for the same reason as './toolAcquisition' above - isolates index.ts's own
+// wiring from statusTile.ts's real behavior (its own registerDashlet call shape is
+// covered directly by statusTile.test.ts instead).
+vi.mock('./statusTile', () => ({
+  registerWsmStatusDashlet: registerWsmStatusDashletMock,
 }));
 
 import main from './index';
@@ -114,5 +122,20 @@ describe('main (index.ts)', () => {
 
     // Let the rejected promise's .catch() handler actually run before the test ends.
     await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  it('registers the WSM status dashlet once, at context.once time, regardless of the active game', () => {
+    // Unlike tryRegisterWsmTool, this registration isn't gated on isWitcher3Active here
+    // - statusTile.ts's own registerDashlet call supplies a live isVisible callback
+    // instead (covered by statusTile.test.ts), so index.ts always registers it once.
+    ensureWsmToolRegisteredMock.mockClear().mockResolvedValue(false);
+    registerWsmStatusDashletMock.mockClear();
+    const { context, fireOnce } = fakeContext('skyrimse');
+
+    main(context);
+    fireOnce();
+
+    expect(registerWsmStatusDashletMock).toHaveBeenCalledTimes(1);
+    expect(registerWsmStatusDashletMock).toHaveBeenCalledWith(context);
   });
 });

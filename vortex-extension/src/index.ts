@@ -1,5 +1,6 @@
 import { log, types } from 'vortex-api';
 import { isWitcher3Active } from './gating';
+import { registerWsmStatusDashlet } from './statusTile';
 import { ensureWsmToolRegistered } from './toolAcquisition';
 
 /**
@@ -66,6 +67,12 @@ function main(context: types.IExtensionContext): boolean {
   context.once(() => {
     tryRegisterWsmTool();
     context.api.events.on('gamemode-activated', tryRegisterWsmTool);
+
+    // Unit J: the dependency/status dashlet - registered once here, unlike
+    // tryRegisterWsmTool above, since registerDashlet's own `isVisible` callback (see
+    // statusTile.ts) is re-evaluated by Vortex live on every game-mode switch, so no
+    // 'gamemode-activated' re-check is needed for this registration itself.
+    registerWsmStatusDashlet(context);
   });
 
   return true;
