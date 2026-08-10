@@ -23,13 +23,19 @@ npm test           # fast, Node-only unit tests
 ```
 
 `npm test` only runs the fast, Node-only unit tests (`src/**/*.test.ts`) - no .NET SDK
-needed. `src/mcpClient.ts`'s real, spawned-process integration test
-(`test/mcpClient.integration.test.ts`) is a separate script, `npm run test:integration`,
-since it needs a local .NET SDK and a buildable `WitcherScriptMerger.Headless` (it will
-run `dotnet build` itself if the exe isn't already present) - kept out of the default
-`npm test` so a Node-only environment (e.g. a contributor machine or CI runner without
-the .NET SDK on `PATH`) isn't forced through a multi-minute .NET build just to iterate on
-this extension's own TypeScript.
+needed. The real, spawned-process integration tests are a separate script, `npm run
+test:integration`, since they need a local .NET SDK and a built/published
+`WitcherScriptMerger.Headless` - kept out of the default `npm test` so a Node-only
+environment (e.g. a contributor machine or CI runner without the .NET SDK on `PATH`)
+isn't forced through a multi-minute .NET build just to iterate on this extension's own
+TypeScript. Two different `WitcherScriptMerger.Headless` invocations are involved:
+`test/mcpClient.integration.test.ts` runs a plain `dotnet build` itself if the exe isn't
+already present (framework-dependent, fast); `test/toolAcquisition.integration.test.ts`
+instead runs `dotnet publish -c Release -p:PublishProfile=win-x64` (self-contained,
+single-file, matching `.github/workflows/release.yml`'s own publish step exactly) if
+that specific publish output isn't already present - slower on a cold run (produces a
+~78 MB standalone exe) since it stands in for a downloaded-and-extracted release asset,
+which the plain `dotnet build` output doesn't represent.
 
 ## Status
 
