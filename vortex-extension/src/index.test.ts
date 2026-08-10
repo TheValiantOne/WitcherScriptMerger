@@ -16,17 +16,23 @@ import main from './index';
 import { WITCHER3_GAME_ID } from './gating';
 
 /** A minimal stand-in for IExtensionContext - just enough surface for index.ts's own
- *  logic (context.once, context.api.getState/events.on), matching gating.test.ts's own
- *  fakeApi philosophy: a simplified fake, not a replica of Vortex's real context shape. */
+ *  logic (context.once, context.api.getState/events.on, context.registerAction - the
+ *  last one added alongside resolveAction.ts's registration, called directly at
+ *  `main()` time per IExtensionContext.once's own doc comment - see index.ts's own
+ *  updated header comment for why that's NOT deferred through context.once), matching
+ *  gating.test.ts's own fakeApi philosophy: a simplified fake, not a replica of
+ *  Vortex's real context shape. */
 function fakeContext(initialActiveGameId: string | undefined) {
   const state = { activeGameId: initialActiveGameId };
   let onceCallback: (() => void) | undefined;
   const eventListeners = new Map<string, Array<() => void>>();
+  const registerActionMock = vi.fn();
 
   const context = {
     once: (callback: () => void) => {
       onceCallback = callback;
     },
+    registerAction: registerActionMock,
     api: {
       getState: () => state,
       events: {
@@ -46,6 +52,7 @@ function fakeContext(initialActiveGameId: string | undefined) {
     setActiveGame: (gameId: string | undefined) => {
       state.activeGameId = gameId;
     },
+    registerActionMock,
   };
 }
 
@@ -114,5 +121,33 @@ describe('main (index.ts)', () => {
 
     // Let the rejected promise's .catch() handler actually run before the test ends.
     await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  it('registers the "Resolve Script Conflicts" action directly (not deferred through context.once), gated live on witcher3 being active', () => {
+    const { context, registerActionMock, setActiveGame } = fakeContext('skyrimse');
+
+    main(context);
+
+    // Registered synchronously by main() itself - IExtensionContext.once's own doc
+    // comment says registrations are expected to have already happened by the time
+    // `once` fires, so this must not require fireOnce() to have been called at all.
+    expect(registerActionMock).toHaveBeenCalledTimes(1);
+    const [group, , , , title, , condition] = registerActionMock.mock.calls[0] as [
+      string,
+      number,
+      string,
+      unknown,
+      string,
+      unknown,
+      () => boolean,
+    ];
+    expect(group).toBe('mod-icons');
+    expect(title).toBe('Resolve Script Conflicts');
+
+    // The condition callback is live, re-evaluated against current state each time
+    // Vortex calls it - not baked in once at registration time.
+    expect(condition()).toBe(false);
+    setActiveGame(WITCHER3_GAME_ID);
+    expect(condition()).toBe(true);
   });
 });
