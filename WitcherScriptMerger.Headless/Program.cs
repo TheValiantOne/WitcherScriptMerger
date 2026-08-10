@@ -157,6 +157,8 @@ namespace WitcherScriptMerger.Headless
 			Console.WriteLine($"Merged {summary.Merged.Count} file(s), skipped {summary.Skipped.Count}.");
 			foreach (var path in summary.Skipped)
 				Console.WriteLine($"  skipped: {path}");
+			foreach (var decision in summary.FunctionLevelDecisions)
+				Console.WriteLine($"  function-level: {decision}");
 
 			return summary.Skipped.Count == 0 ? 0 : 2;
 		}

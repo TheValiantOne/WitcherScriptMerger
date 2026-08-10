@@ -116,13 +116,22 @@ namespace WitcherScriptMerger.Tools
 
 		#endregion
 
+		// Set (or reset to empty) at the start of every MergeHeadless call - see that
+		// method's own comment. A single instance of this class is reused for a whole
+		// headless run (FileMerger constructs one field), so this must never be left
+		// holding a previous file's decisions when the current file never reaches the
+		// function-level engine at all.
+		public IReadOnlyList<string> LastFunctionLevelDecisions { get; private set; } = Array.Empty<string>();
+
 		public MergeEngineResult Merge(
 			FileMerger.MergeSource source1,
 			FileMerger.MergeSource source2,
 			FileInfo vanillaFile,
-			string outputPath)
+			string outputPath,
+			string oldDescription = null,
+			string newDescription = null)
 		{
-			var result = MergeHeadless(source1, source2, vanillaFile, outputPath);
+			var result = MergeHeadless(source1, source2, vanillaFile, outputPath, oldDescription: oldDescription, newDescription: newDescription);
 			return result == MergeEngineResult.NeedsManualResolution ? MergeEngineResult.Failed : result;
 		}
 
@@ -147,8 +156,12 @@ namespace WitcherScriptMerger.Tools
 			FileMerger.MergeSource source2,
 			FileInfo vanillaFile,
 			string outputPath,
-			bool openConflictMarkers = true)
+			bool openConflictMarkers = true,
+			string oldDescription = null,
+			string newDescription = null)
 		{
+			LastFunctionLevelDecisions = Array.Empty<string>();
+
 			var hasVanillaVersion = vanillaFile != null && vanillaFile.Exists;
 
 			// A 3-way merge is meaningless without a base to diff against - confirmed
@@ -213,6 +226,15 @@ namespace WitcherScriptMerger.Tools
 			}
 			catch (DiffAlgorithmException ex)
 			{
+				// Before giving up on the whole file: the function-level engine catches
+				// this same exception per-function (see FunctionLevelMergeEngine) and
+				// falls back to a whole-function tiebreak instead, so a file can still
+				// merge even when the whole-file 3-way diff hits this bug. Only
+				// attempted for .ws files - the extractor is WitcherScript-specific and
+				// has no notion of XML structure.
+				if (TryFunctionLevelRescue(baseText, oldText, newText, source1, source2, outputPath, oldDescription, newDescription))
+					return MergeEngineResult.AutoSolved;
+
 				// DiffPlex's own diff algorithm produced output it isn't safe to trust
 				// (see BuildMerge's comment) - don't write anything, including a sidecar:
 				// the "conflict marker" content itself would have been built from the
@@ -241,6 +263,15 @@ namespace WitcherScriptMerger.Tools
 				FileEncoding.WriteUtf16(outputPath, result.MergedText);
 				return MergeEngineResult.AutoSolved;
 			}
+
+			// Before falling back to conflict markers: same function-level rescue
+			// attempt as the DiffAlgorithmException catch above, for the "produced
+			// output, but with a real conflict block" case. See
+			// FunctionLevelMergeEngine's own comment for why this is a fallback that
+			// only ever activates where the whole-file merge has already failed, never
+			// a parallel code path for merges that would have succeeded anyway.
+			if (TryFunctionLevelRescue(baseText, oldText, newText, source1, source2, outputPath, oldDescription, newDescription))
+				return MergeEngineResult.AutoSolved;
 
 			// Never write conflict markers to outputPath itself: FileMerger's headless
 			// callers (MergeFlatConflictHeadless/MergeBundleConflictHeadless) check
@@ -364,6 +395,67 @@ namespace WitcherScriptMerger.Tools
 		static void DeleteIfExists(string path)
 		{
 			try { if (File.Exists(path)) File.Delete(path); } catch { }
+		}
+
+		// The function-level fallback (see FunctionLevelMergeEngine's own header
+		// comment). Called from both of MergeHeadless's give-up points, never from
+		// anywhere else - this method's whole job is "try to do better than the
+		// failure that's already about to happen," so every early return here means
+		// "the caller proceeds exactly as if this method didn't exist," never a worse
+		// outcome than today's baseline.
+		//
+		// oldDescription/newDescription default to source1.Name/source2.Name (the
+		// pre-existing marker-label convention) when not supplied - accurate for a
+		// merge chain's first pairwise step, but source1.Name resolves to the
+		// accumulated-merge output's own mod name (e.g. the configured merged-mod
+		// folder) from the second step onward, since FileMerger.MergeFlatConflictHeadless
+		// reassigns source1 to the prior step's output file. FileMerger passes a
+		// richer "accumulated merge (modA, modB)" description once it has more than
+		// one real mod recorded for this chain (see MergeTextHeadless/
+		// MergeTextInteractive) so a Decisions[] note reads sensibly past the first
+		// step; this method doesn't know or care which case it's in.
+		bool TryFunctionLevelRescue(
+			string baseText, string oldText, string newText,
+			FileMerger.MergeSource source1, FileMerger.MergeSource source2, string outputPath,
+			string oldDescription, string newDescription)
+		{
+			if (!Path.GetExtension(outputPath).EqualsIgnoreCase(".ws"))
+				return false;
+
+			FunctionLevelMergeResult result;
+			try
+			{
+				result = FunctionLevelMergeEngine.TryMerge(
+					baseText, oldText, newText,
+					source1.Name, source2.Name,
+					oldDescription ?? source1.Name, newDescription ?? source2.Name);
+			}
+			catch
+			{
+				// A latent bug in the new engine must never regress this method below
+				// its pre-existing behavior - the caller falls through to whatever it
+				// was already about to do (write a sidecar, or report the
+				// DiffAlgorithmException as-is) exactly as if this rescue attempt had
+				// declined outright.
+				return false;
+			}
+
+			if (!result.Applied)
+				return false;
+
+			DeleteIfExists(GetConflictMarkerPath(outputPath));
+			FileEncoding.WriteUtf16(outputPath, result.MergedText);
+			LastFunctionLevelDecisions = result.Decisions;
+
+			if (result.Decisions.Count > 0)
+			{
+				AppState.Notifier.ShowMessage(
+					$"Merged {source1.Name} + {source2.Name} at the function level after the whole-file merge " +
+					$"couldn't auto-solve it:\n\n" + string.Join("\n", result.Decisions),
+					"Merged (function-level)", NotifyButtons.OK, DialogIcon.Information);
+			}
+
+			return true;
 		}
 
 		#region Merge algorithm

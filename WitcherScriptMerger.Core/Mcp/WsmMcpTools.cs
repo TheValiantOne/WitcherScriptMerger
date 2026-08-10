@@ -50,7 +50,12 @@ namespace WitcherScriptMerger.Mcp
 		[McpServerTool(Name = "merge_conflicts"), Description(
 			"Merges detected conflicts headlessly; conflicts that can't be auto-solved are skipped " +
 			"and reported, not merged - a conflict-marker sidecar file is written and opened in the " +
-			"default editor for manual review instead. Restrict to specific files with " +
+			"default editor for manual review instead. A conflict a whole-file merge can't resolve " +
+			"may still auto-solve via a function-level fallback (splits vanilla/mod .ws files into " +
+			"individual functions and resolves each independently); any such case is reported in " +
+			"functionLevelDecisions, one line per resolved function explaining which side's version " +
+			"was kept and why - always worth surfacing to the user, not just the merged/skipped " +
+			"counts. Restrict to specific files with " +
 			"relativePaths (default: every detected conflict); override a file's mod merge order " +
 			"with orderOverrides (default merge order otherwise matches the game's own load order). " +
 			"Set dryRun to preview which conflicts would auto-solve without writing any merged " +
@@ -143,7 +148,7 @@ namespace WitcherScriptMerger.Mcp
 				if (!dryRun)
 					AppState.Inventory.Save();
 
-				return new { merged = summary.Merged, skipped = summary.Skipped, unmatched, dryRun };
+				return new { merged = summary.Merged, skipped = summary.Skipped, unmatched, dryRun, functionLevelDecisions = summary.FunctionLevelDecisions };
 			}
 		}
 
