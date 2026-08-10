@@ -30,7 +30,10 @@ const vortexApiPackageJsonPath = path.join(
 );
 const { peerDependencies } = JSON.parse(fs.readFileSync(vortexApiPackageJsonPath, 'utf8'));
 
-const nodeBuiltins = ['fs', 'path', 'os', 'child_process', 'net', 'util'];
+// 'https' and 'http' (githubRelease.ts's download logic) and 'stream' (piping an https
+// response into a write stream) added alongside toolAcquisition.ts's tool-acquisition
+// unit; the rest predate it.
+const nodeBuiltins = ['fs', 'path', 'os', 'child_process', 'net', 'util', 'https', 'http', 'stream'];
 
 function asExternals(names) {
   return names.reduce((acc, name) => {
