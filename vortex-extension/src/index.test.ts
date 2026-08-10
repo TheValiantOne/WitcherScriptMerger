@@ -2,26 +2,40 @@ import { describe, expect, it, vi } from 'vitest';
 
 // `vi.mock` factories are hoisted above imports, so anything they reference has to come
 // from `vi.hoisted` rather than an ordinary outer-scope `const` - this isolates index.ts's
-// own wiring (what this file actually tests) from toolAcquisition.ts's real behavior
-// (already thoroughly covered by toolAcquisition.test.ts).
-const { ensureWsmToolRegisteredMock } = vi.hoisted(() => ({
+// own wiring (what this file actually tests) from toolAcquisition.ts/conflictScan.ts/
+// conflictNotifications.ts's own real behavior, each already thoroughly covered by their
+// own *.test.ts files.
+const { ensureWsmToolRegisteredMock, isWsmToolAcquiredMock, scanWsmConflictsMock, notifyConflictsIfChangedMock } = vi.hoisted(() => ({
   ensureWsmToolRegisteredMock: vi.fn(),
+  isWsmToolAcquiredMock: vi.fn(),
+  scanWsmConflictsMock: vi.fn(),
+  notifyConflictsIfChangedMock: vi.fn(),
 }));
 
 vi.mock('./toolAcquisition', () => ({
   ensureWsmToolRegistered: ensureWsmToolRegisteredMock,
 }));
 
+vi.mock('./conflictScan', () => ({
+  isWsmToolAcquired: isWsmToolAcquiredMock,
+  scanWsmConflicts: scanWsmConflictsMock,
+}));
+
+vi.mock('./conflictNotifications', () => ({
+  notifyConflictsIfChanged: notifyConflictsIfChangedMock,
+}));
+
 import main from './index';
 import { WITCHER3_GAME_ID } from './gating';
 
 /** A minimal stand-in for IExtensionContext - just enough surface for index.ts's own
- *  logic (context.once, context.api.getState/events.on), matching gating.test.ts's own
- *  fakeApi philosophy: a simplified fake, not a replica of Vortex's real context shape. */
+ *  logic (context.once, context.api.getState/events.on/onAsync), matching gating.test.ts's
+ *  own fakeApi philosophy: a simplified fake, not a replica of Vortex's real context shape. */
 function fakeContext(initialActiveGameId: string | undefined) {
   const state = { activeGameId: initialActiveGameId };
   let onceCallback: (() => void) | undefined;
   const eventListeners = new Map<string, Array<() => void>>();
+  const asyncListeners = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 
   const context = {
     once: (callback: () => void) => {
@@ -36,6 +50,9 @@ function fakeContext(initialActiveGameId: string | undefined) {
           eventListeners.set(eventName, listeners);
         },
       },
+      onAsync: (eventName: string, listener: (...args: unknown[]) => Promise<unknown>) => {
+        asyncListeners.set(eventName, listener);
+      },
     },
   };
 
@@ -43,6 +60,7 @@ function fakeContext(initialActiveGameId: string | undefined) {
     context: context as unknown as Parameters<typeof main>[0],
     fireOnce: () => onceCallback?.(),
     fireEvent: (eventName: string) => eventListeners.get(eventName)?.forEach((listener) => listener()),
+    fireAsyncEvent: (eventName: string, ...args: unknown[]) => asyncListeners.get(eventName)?.(...args),
     setActiveGame: (gameId: string | undefined) => {
       state.activeGameId = gameId;
     },
@@ -114,5 +132,78 @@ describe('main (index.ts)', () => {
 
     // Let the rejected promise's .catch() handler actually run before the test ends.
     await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  describe('did-deploy conflict scanning', () => {
+    it('registers a did-deploy handler via onAsync (not events.on) at context.once time', () => {
+      ensureWsmToolRegisteredMock.mockClear().mockResolvedValue(false);
+      const { context, fireOnce, fireAsyncEvent } = fakeContext(undefined);
+
+      main(context);
+      fireOnce();
+
+      // No handler registered for a plain events.on('did-deploy', ...) - only onAsync.
+      expect(fireAsyncEvent('did-deploy')).toBeInstanceOf(Promise);
+    });
+
+    it('does nothing when witcher3 is not the active game', async () => {
+      ensureWsmToolRegisteredMock.mockClear().mockResolvedValue(false);
+      isWsmToolAcquiredMock.mockClear();
+      scanWsmConflictsMock.mockClear();
+      const { context, fireOnce, fireAsyncEvent } = fakeContext('skyrimse');
+
+      main(context);
+      fireOnce();
+      await fireAsyncEvent('did-deploy', 'profile1', undefined);
+
+      expect(isWsmToolAcquiredMock).not.toHaveBeenCalled();
+      expect(scanWsmConflictsMock).not.toHaveBeenCalled();
+    });
+
+    it('skips scanning (without throwing) when no WSM tool has been acquired yet', async () => {
+      ensureWsmToolRegisteredMock.mockClear().mockResolvedValue(false);
+      isWsmToolAcquiredMock.mockClear().mockResolvedValue(false);
+      scanWsmConflictsMock.mockClear();
+      notifyConflictsIfChangedMock.mockClear();
+      const { context, fireOnce, fireAsyncEvent } = fakeContext(WITCHER3_GAME_ID);
+
+      main(context);
+      fireOnce();
+      await fireAsyncEvent('did-deploy', 'profile1', undefined);
+
+      expect(isWsmToolAcquiredMock).toHaveBeenCalledTimes(1);
+      expect(scanWsmConflictsMock).not.toHaveBeenCalled();
+      expect(notifyConflictsIfChangedMock).not.toHaveBeenCalled();
+    });
+
+    it('scans and notifies when witcher3 is active and a WSM tool is acquired', async () => {
+      ensureWsmToolRegisteredMock.mockClear().mockResolvedValue(false);
+      isWsmToolAcquiredMock.mockClear().mockResolvedValue(true);
+      const conflicts = [{ relativePath: 'a.ws' }];
+      scanWsmConflictsMock.mockClear().mockResolvedValue(conflicts);
+      notifyConflictsIfChangedMock.mockClear();
+      const { context, fireOnce, fireAsyncEvent } = fakeContext(WITCHER3_GAME_ID);
+
+      main(context);
+      fireOnce();
+      await fireAsyncEvent('did-deploy', 'profile1', undefined);
+
+      expect(scanWsmConflictsMock).toHaveBeenCalledTimes(1);
+      expect(notifyConflictsIfChangedMock).toHaveBeenCalledWith(context.api, conflicts);
+    });
+
+    it('resolves (never rejects) when scanWsmConflicts throws - onAsync listeners must report their own errors', async () => {
+      ensureWsmToolRegisteredMock.mockClear().mockResolvedValue(false);
+      isWsmToolAcquiredMock.mockClear().mockResolvedValue(true);
+      scanWsmConflictsMock.mockClear().mockRejectedValue(new Error('spawn failed'));
+      notifyConflictsIfChangedMock.mockClear();
+      const { context, fireOnce, fireAsyncEvent } = fakeContext(WITCHER3_GAME_ID);
+
+      main(context);
+      fireOnce();
+
+      await expect(fireAsyncEvent('did-deploy', 'profile1', undefined)).resolves.toBeUndefined();
+      expect(notifyConflictsIfChangedMock).not.toHaveBeenCalled();
+    });
   });
 });
