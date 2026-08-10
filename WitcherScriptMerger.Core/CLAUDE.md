@@ -426,10 +426,15 @@ function body only ever gains brace depth from control flow, never another funct
 declaration. That structural simplicity is what makes plain brace/paren counting
 sufficient, as long as it's string/comment-aware (a single masking pass shared by both
 the brace-safe extraction path and the public `StripComments` helper) so a brace or
-paren inside a string literal or comment can never be mistaken for real syntax. Reuses
-`Tools/FileEncoding.cs` for all file I/O — mod files are inconsistently encoded even
-though vanilla is always UTF-16LE+BOM (see "Text-merge input encoding" below), the exact
-same hazard this class's own callers already have to account for.
+paren inside a string literal or comment can never be mistaken for real syntax.
+`ScriptUnitExtractor` itself does no file I/O at all — `Extract`/`StripComments` take
+already-read `string` text — encoding normalization is the caller's job:
+`DiffPlexMergeEngine.MergeHeadless` reads via `Tools/FileEncoding.cs` before ever
+reaching this class, the same `ReadAnyEncoding` call every other text-merge path already
+uses (mod files are inconsistently encoded even though vanilla is always UTF-16LE+BOM —
+see "Text-merge input encoding" below). Any future caller that reaches `Extract`/
+`StripComments` directly with raw file bytes, rather than through that existing
+encoding-normalized path, would need to normalize first itself.
 
 **Per-function resolution (`FunctionLevelMergeEngine.TryMerge`)** tries cheap one-sided
 shortcuts (unchanged, only-one-side-edited, both-sides-made-the-identical-edit) before

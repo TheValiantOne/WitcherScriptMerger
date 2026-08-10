@@ -116,16 +116,28 @@ namespace WitcherScriptMerger.Tools
 			var kinds = ClassifySpans(text);
 			var mask = BuildMask(text, kinds, blankStringsToo: true);
 			var lineStarts = ComputeLineStarts(text);
+			var addFieldLineStarts = FindAllAddFieldAnnotationLineStarts(mask, lineStarts);
 
 			var gaps = new List<string>();
 			var units = new List<ScriptUnit>();
 
 			var cursor = 0;
 			var pos = 0;
+			// Monotonic pointer into addFieldLineStarts, not a fresh scan per unit -
+			// see that list's own comment for the real O(units * remaining lines) cost
+			// a per-call rescan used to have (a vanilla file has zero @addField
+			// annotations at all, since it's a mod-only construct, so every one of a
+			// large vanilla file's function extractions used to scan all the way to
+			// EOF just to confirm that). pos only ever increases across iterations, so
+			// this index never needs to rewind.
+			var addFieldIndex = 0;
 			while (pos <= text.Length)
 			{
 				var funcMatch = DeclarationRegex.Match(mask, pos);
-				var fieldLineStart = FindNextAddFieldAnnotationLineStart(mask, lineStarts, pos);
+
+				while (addFieldIndex < addFieldLineStarts.Count && addFieldLineStarts[addFieldIndex] < pos)
+					++addFieldIndex;
+				var fieldLineStart = addFieldIndex < addFieldLineStarts.Count ? (int?)addFieldLineStarts[addFieldIndex] : null;
 
 				var funcPos = funcMatch.Success ? funcMatch.Index : int.MaxValue;
 				var fieldPos = fieldLineStart ?? int.MaxValue;
@@ -277,24 +289,25 @@ namespace WitcherScriptMerger.Tools
 			return resultStart;
 		}
 
-		static int? FindNextAddFieldAnnotationLineStart(string mask, List<int> lineStarts, int pos)
+		// A single O(lines) forward pass over the whole document, computed once per
+		// Extract call - not a fresh scan-to-EOF per extracted unit (see Extract's own
+		// comment on why that mattered). lineEnd is computed directly from the loop's
+		// own lineIndex rather than via GetLineEnd (which would redundantly re-derive
+		// that same index through a binary search).
+		static List<int> FindAllAddFieldAnnotationLineStarts(string mask, List<int> lineStarts)
 		{
-			var lineIndex = GetLineIndex(lineStarts, pos);
-			if (lineStarts[lineIndex] < pos)
-				++lineIndex;
-
-			for (; lineIndex < lineStarts.Count; ++lineIndex)
+			var result = new List<int>();
+			for (var lineIndex = 0; lineIndex < lineStarts.Count; ++lineIndex)
 			{
 				var lineStart = lineStarts[lineIndex];
-				var lineEnd = GetLineEnd(mask, lineStarts, lineStart);
+				var lineEnd = lineIndex + 1 < lineStarts.Count ? lineStarts[lineIndex + 1] : mask.Length;
 				var content = mask.Substring(lineStart, lineEnd - lineStart).Trim();
 				if (content.Length == 0)
 					continue;
 				if (AddFieldAnnotationRegex.IsMatch(content))
-					return lineStart;
+					result.Add(lineStart);
 			}
-
-			return null;
+			return result;
 		}
 
 		#endregion

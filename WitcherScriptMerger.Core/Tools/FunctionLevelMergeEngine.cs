@@ -1,7 +1,6 @@
 ﻿using System.Collections.Generic;
 using System.Linq;
 using System.Text;
-using System.Text.RegularExpressions;
 using DiffPlex;
 
 namespace WitcherScriptMerger.Tools
@@ -52,8 +51,6 @@ namespace WitcherScriptMerger.Tools
 	// independently before reassembling.
 	public static class FunctionLevelMergeEngine
 	{
-		static readonly Regex WhitespaceRun = new Regex(@"[ \t\r\n\f\v]+", RegexOptions.Compiled);
-
 		public static FunctionLevelMergeResult TryMerge(
 			string baseText, string oldText, string newText,
 			string oldMarkerLabel, string newMarkerLabel,
@@ -72,6 +69,22 @@ namespace WitcherScriptMerger.Tools
 			}
 
 			var vanillaCount = baseDoc.Units.Count;
+
+			// Nothing for a FUNCTION-level engine to offer when vanilla has zero
+			// extracted functions/fields at all (e.g. a file containing only top-level
+			// consts/enums) - the entire document would be a single "gap" slot, and
+			// gap content always reverts to vanilla's own text on reassembly (see
+			// NoteGapMismatchIfAny's comment) - silently discarding BOTH sides' real,
+			// substantive edits and reporting that data loss as a successful
+			// AutoSolved merge, which is a materially worse outcome than declining and
+			// falling through to the existing whole-file conflict-marker behavior.
+			// Declining here is the correct behavior, not just a crash-avoidance
+			// workaround for the vanillaCount == 0 case GetSideGapIndex/
+			// GetGapEligibility must otherwise handle correctly for the (still valid)
+			// case where vanilla DOES have units but a specific slot's neighbors don't.
+			if (vanillaCount == 0)
+				return FunctionLevelMergeResult.Declined;
+
 			var oldAlignment = UnitAligner.Align(baseDoc.Units, oldDoc.Units);
 			var newAlignment = UnitAligner.Align(baseDoc.Units, newDoc.Units);
 
@@ -105,13 +118,30 @@ namespace WitcherScriptMerger.Tools
 			var merged = new StringBuilder();
 			for (var slot = 0; slot <= vanillaCount; ++slot)
 			{
-				if (IsGapComparisonEligible(oldAlignment, newAlignment, slot, vanillaCount))
+				switch (GetGapEligibility(oldAlignment, newAlignment, slot, vanillaCount))
 				{
-					NoteGapMismatchIfAny(
-						baseDoc.Gaps[slot],
-						oldDoc.Gaps[GetSideGapIndex(oldAlignment, slot, vanillaCount)],
-						newDoc.Gaps[GetSideGapIndex(newAlignment, slot, vanillaCount)],
-						oldDescription, newDescription, decisions);
+					case GapEligibility.Eligible:
+						NoteGapMismatchIfAny(
+							baseDoc.Gaps[slot],
+							oldDoc.Gaps[GetSideGapIndex(oldAlignment, slot, vanillaCount)],
+							newDoc.Gaps[GetSideGapIndex(newAlignment, slot, vanillaCount)],
+							oldDescription, newDescription, decisions);
+						break;
+
+					case GapEligibility.IneligibleDeletion:
+						// Unlike an insertion (already visible in the reassembled output),
+						// a deletion nearby means non-function content either side may have
+						// changed here (a default value, an undecorated var, ...) has no
+						// well-defined single gap index to compare at all - see
+						// GetGapEligibility's own comment. Silently keeping vanilla's text
+						// with zero signal would contradict this class's own "never empty
+						// content silently" contract, so a conservative, location-described
+						// caveat is emitted instead of a precise diff.
+						decisions.Add(
+							$"content {DescribeSlot(baseDoc.Units, slot, vanillaCount)} wasn't automatically " +
+							"verified because a nearby function was removed by one side - if either mod changed " +
+							"non-function content here, review manually.");
+						break;
 				}
 
 				merged.Append(baseDoc.Gaps[slot]);
@@ -245,6 +275,14 @@ namespace WitcherScriptMerger.Tools
 			if (oldInsertions.Count == 0 && newInsertions.Count == 0)
 				return new List<string>();
 
+			// Two insertions with the same name on ONE side (e.g. a mod's own
+			// copy-paste mistake) is an ambiguity this method can't safely resolve -
+			// which occurrence did the mod author actually intend? Decline rather than
+			// guess, same policy as the same-name-different-body-across-sides case
+			// below. Also avoids ToDictionary throwing on the duplicate key.
+			if (HasDuplicateNames(oldInsertions) || HasDuplicateNames(newInsertions))
+				return null;
+
 			var newByName = newInsertions.ToDictionary(u => u.Name);
 			var consumedNewNames = new HashSet<string>();
 			var result = new List<string>();
@@ -270,44 +308,81 @@ namespace WitcherScriptMerger.Tools
 			return result;
 		}
 
+		static bool HasDuplicateNames(List<ScriptUnit> units) => units.Select(u => u.Name).Distinct().Count() != units.Count;
+
 		#endregion
 
 		#region Gap comparison
 
-		// A slot is only compared when both its neighboring vanilla units (if any) are
-		// present, unmatched-to-nothing, on both sides, and neither side inserted
-		// anything at this slot - i.e. the simple, overwhelmingly common case (per this
-		// feature's own real-data measurement: the large majority of a file's gaps sit
-		// between two functions neither mod touched structurally). Once an insertion or
-		// deletion touches a slot's boundary, "the equivalent gap on each side" stops
-		// being a single well-defined span to compare - deferred rather than guessed at.
-		static bool IsGapComparisonEligible(UnitAlignment oldAlignment, UnitAlignment newAlignment, int slot, int vanillaCount)
+		enum GapEligibility
 		{
-			if (oldAlignment.InsertionsAtSlot[slot].Count > 0 || newAlignment.InsertionsAtSlot[slot].Count > 0)
-				return false;
-			if (slot > 0 && (!oldAlignment.MatchedSideIndex[slot - 1].HasValue || !newAlignment.MatchedSideIndex[slot - 1].HasValue))
-				return false;
-			if (slot < vanillaCount && (!oldAlignment.MatchedSideIndex[slot].HasValue || !newAlignment.MatchedSideIndex[slot].HasValue))
-				return false;
-			return true;
+			Eligible,
+			IneligibleInsertion,
+			IneligibleDeletion,
 		}
 
-		// Only valid when IsGapComparisonEligible(slot) is true, which guarantees
-		// MatchedSideIndex[slot] (or [slot - 1], for the final slot) has a value.
+		// A slot is only precisely compared when both its neighboring vanilla units (if
+		// any) are present, unmatched-to-nothing, on both sides, and neither side
+		// inserted anything at this slot - i.e. the simple, overwhelmingly common case
+		// (per this feature's own real-data measurement: the large majority of a file's
+		// gaps sit between two functions neither mod touched structurally). Once an
+		// insertion or deletion touches a slot's boundary, "the equivalent gap on each
+		// side" stops being a single well-defined span to compare - deferred rather than
+		// guessed at, but NOT silently: an insertion is already visible in the
+		// reassembled output (no note needed), while a deletion gets a conservative
+		// caveat note from TryMerge's caller (see GapEligibility.IneligibleDeletion's
+		// call site) since non-function content near it has no signal at all otherwise.
+		static GapEligibility GetGapEligibility(UnitAlignment oldAlignment, UnitAlignment newAlignment, int slot, int vanillaCount)
+		{
+			if (oldAlignment.InsertionsAtSlot[slot].Count > 0 || newAlignment.InsertionsAtSlot[slot].Count > 0)
+				return GapEligibility.IneligibleInsertion;
+			if (slot > 0 && (!oldAlignment.MatchedSideIndex[slot - 1].HasValue || !newAlignment.MatchedSideIndex[slot - 1].HasValue))
+				return GapEligibility.IneligibleDeletion;
+			if (slot < vanillaCount && (!oldAlignment.MatchedSideIndex[slot].HasValue || !newAlignment.MatchedSideIndex[slot].HasValue))
+				return GapEligibility.IneligibleDeletion;
+			return GapEligibility.Eligible;
+		}
+
+		// Only valid when GetGapEligibility(slot) is Eligible, which guarantees a
+		// meaningful gap index exists on this side for the requested slot. slot == 0 is
+		// always gap index 0 outright - the leading gap exists at a fixed position
+		// regardless of alignment, unlike every other slot, which is anchored to a
+		// matched vanilla unit's own index. (A prior version of this method derived
+		// slot 0 via the same "matched unit's own index" branch used for slot 1..
+		// vanillaCount-1, which happened to also produce 0 whenever vanillaCount > 0 -
+		// but that branch requires slot < vanillaCount, which is false whenever
+		// vanillaCount == 0, falling through to the "final slot" branch below and
+		// indexing MatchedSideIndex[-1] on an empty array. A file with zero extracted
+		// functions/fields - e.g. one containing only top-level consts/enums - is a
+		// real, reachable case, not hypothetical.)
 		static int GetSideGapIndex(UnitAlignment alignment, int slot, int vanillaCount)
 		{
-			if (slot < vanillaCount && alignment.MatchedSideIndex[slot].HasValue)
+			if (slot == 0)
+				return 0;
+			if (slot < vanillaCount)
 				return alignment.MatchedSideIndex[slot].Value;
 			return alignment.MatchedSideIndex[slot - 1].Value + 1;
+		}
+
+		static string DescribeSlot(IReadOnlyList<ScriptUnit> vanillaUnits, int slot, int vanillaCount)
+		{
+			if (vanillaCount == 0)
+				return "in this file";
+			if (slot == 0)
+				return $"before {vanillaUnits[0].Name}";
+			if (slot == vanillaCount)
+				return $"after {vanillaUnits[vanillaCount - 1].Name}";
+			return $"between {vanillaUnits[slot - 1].Name} and {vanillaUnits[slot].Name}";
 		}
 
 		// Reassembly always keeps vanilla's own gap text verbatim (deterministic,
 		// matches DiffPlexMergeEngine's own "take one side" precedent elsewhere) - this
 		// only ever adds an audit note when a side's gap content differs from vanilla's
-		// by more than whitespace/comments, since that's real, non-mechanical content
-		// (typically a mod author's own comment) silently not making it into the merged
-		// output. A purely whitespace/comment difference is never noted - that's exactly
-		// the class of noise this whole engine exists to stop treating as meaningful.
+		// by more than whitespace, since that's real, non-mechanical content (a
+		// comment, but just as easily a default value or an undecorated var - gap
+		// content isn't only comments) silently not making it into the merged output. A
+		// purely whitespace difference is never noted - that's exactly the class of
+		// noise this whole engine exists to stop treating as meaningful.
 		static void NoteGapMismatchIfAny(string baseGap, string oldGap, string newGap, string oldDescription, string newDescription, List<string> decisions)
 		{
 			var baseNorm = NormalizeGap(baseGap);
@@ -315,18 +390,23 @@ namespace WitcherScriptMerger.Tools
 			var newDiffers = NormalizeGap(newGap) != baseNorm;
 
 			if (oldDiffers)
-				decisions.Add($"a comment from {oldDescription} near this position was not preserved (vanilla formatting/comments kept).");
+				decisions.Add($"content from {oldDescription} near this position was not preserved (vanilla formatting/content kept).");
 			if (newDiffers)
-				decisions.Add($"a comment from {newDescription} near this position was not preserved (vanilla formatting/comments kept).");
+				decisions.Add($"content from {newDescription} near this position was not preserved (vanilla formatting/content kept).");
 		}
 
 		// Deliberately whitespace-collapse only, NOT comment-stripped: this feeds the
-		// note above, whose whole point is to detect when comment CONTENT differs, not
-		// just formatting - stripping comments first would blank away the very thing
-		// being compared, silently defeating the check (caught by
-		// TryMerge_GapCommentDifference_NotedButVanillaGapTextKept). Matches
-		// DiffPlexMergeEngine.NormalizeWhitespace's own whitespace-only spirit.
-		static string NormalizeGap(string text) => WhitespaceRun.Replace(text, " ").Trim();
+		// note above, whose whole point is to detect when gap CONTENT differs, not just
+		// formatting - stripping comments first would blank away the very thing being
+		// compared, silently defeating the check (caught by
+		// TryMerge_GapCommentDifference_NotedButVanillaGapTextKept). Reuses
+		// DiffPlexMergeEngine.NormalizeWhitespace directly rather than a second, private
+		// copy of the same regex+trim logic - an earlier version of this method did
+		// duplicate it, using the parameterless Trim() instead of NormalizeWhitespace's
+		// deliberate Trim(WhitespaceChars), which silently reintroduced the exact
+		// NBSP-vs-space false-equivalence bug that method's own comment documents
+		// fixing (flagged in code review).
+		static string NormalizeGap(string text) => DiffPlexMergeEngine.NormalizeWhitespace(new[] { text });
 
 		#endregion
 	}
