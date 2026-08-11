@@ -8,6 +8,7 @@
     "typecheck": "tsc --noEmit",
     "build": "npm run typecheck && webpack --config webpack.config.cjs",
     "watch": "webpack --config webpack.config.cjs --mode development --watch",
+    "package": "npm run build && node scripts/package.mjs",
     "lint": "eslint src test",
     "test": "vitest run src",
     "test:integration": "vitest run test --no-file-parallelism"
