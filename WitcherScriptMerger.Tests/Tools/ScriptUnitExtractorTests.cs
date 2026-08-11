@@ -360,6 +360,25 @@ namespace WitcherScriptMerger.Tests.Tools
 			Assert.Equal(ScriptUnitKind.Function, doc.Units[1].Kind);
 		}
 
+		[Fact]
+		public void Extract_EnumDeclaration_IsOneUnitAndRoundTrips()
+		{
+			var text =
+				"enum EColors\r\n{\r\n\tEC_Red,\r\n\tEC_Blue\r\n}\r\n\r\n" +
+				"class Foo\r\n{\r\n\tfunction A()\r\n\t{\r\n\t\treturn;\r\n\t}\r\n}\r\n";
+
+			var doc = ScriptUnitExtractor.Extract(text);
+
+			// Whole enum = one unit, keyed distinctly from any same-named function -
+			// a mod ADDING an enum member must go through per-unit resolution instead
+			// of being silently reverted with vanilla's gap text ("I dont know any
+			// 'HVS_Modcrab'", observed live).
+			Assert.Equal(text, ScriptUnitExtractor.Reassemble(doc));
+			Assert.Equal(new[] { "enum:EColors", "Foo::A" }, doc.Units.Select(u => u.ScopedName));
+			Assert.Equal(ScriptUnitKind.EnumDeclaration, doc.Units[0].Kind);
+			Assert.Contains("EC_Blue", doc.Units[0].FullText);
+		}
+
 		#endregion
 	}
 }

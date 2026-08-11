@@ -9,6 +9,16 @@ namespace WitcherScriptMerger.Tools
 	{
 		Function,
 		Field,
+		// A whole `enum Name { ... }` declaration, extracted as ONE unit (members and
+		// braces included). Enum members are bare identifiers, not statements, so they
+		// can't be per-member units - but leaving whole enums in gap territory meant a
+		// mod ADDING a member had that addition silently reverted to vanilla while the
+		// code using the new member survived ("I dont know any 'HVS_Modcrab'",
+		// observed live: modalchemyrequiresmeditation extends hud.ws's
+		// EHudVisibilitySource). As a single unit, an enum edited by one side takes
+		// that side's whole block, and a both-sides edit goes through the normal
+		// per-unit 3-way merge/tiebreak.
+		EnumDeclaration,
 		// A plain (non-@addField) member declaration: `[specifiers] var a, b : T;`,
 		// `default x = value;`, or `[specifiers] autobind c : T = ...;`. Promoted to
 		// unit status (rather than living in gap territory) because real mods add
@@ -58,7 +68,12 @@ namespace WitcherScriptMerger.Tools
 		// The human-facing noun for audit/decision messages - "function OnSpawned" vs
 		// "declaration mCSMCR" - so FunctionLevelMergeEngine's notes don't call a
 		// variable a function.
-		public string DescribeKind() => Kind == ScriptUnitKind.Function ? "function" : "declaration";
+		public string DescribeKind() => Kind switch
+		{
+			ScriptUnitKind.Function => "function",
+			ScriptUnitKind.EnumDeclaration => "enum",
+			_ => "declaration",
+		};
 	}
 
 	// A file split into alternating gap/unit segments: Gaps[0] + Units[0].FullText +
@@ -143,6 +158,11 @@ namespace WitcherScriptMerger.Tools
 			@"^[ \t]*(?:(?:" + SpecifierAlternation + @")\s+)*(?:(?<varkw>var|autobind)\s+(?<names>\w+(?:\s*,\s*\w+)*)\s*:|(?<defkw>default)\s+(?<defname>\w+)\s*=)",
 			RegexOptions.Compiled | RegexOptions.Multiline);
 
+		// A whole-enum unit's header. Anchored like DeclarationRegex; the block is
+		// consumed through its matching close brace (see ExtractEnum).
+		static readonly Regex EnumHeaderRegex = new Regex(
+			@"^[ 	]*enum\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.Multiline);
+
 		// Top-level type headers, for scope tracking (see ScriptUnit.ScopedName).
 		// Matched against the mask; types are top-level-only in WitcherScript (see this
 		// class's own header comment), so scanning header -> matching close brace ->
@@ -186,6 +206,7 @@ namespace WitcherScriptMerger.Tools
 			{
 				var funcMatch = DeclarationRegex.Match(mask, pos);
 				var memberMatch = MemberDeclRegex.Match(mask, pos);
+				var enumMatch = EnumHeaderRegex.Match(mask, pos);
 
 				while (addFieldIndex < addFieldLineStarts.Count && addFieldLineStarts[addFieldIndex] < pos)
 					++addFieldIndex;
@@ -194,8 +215,9 @@ namespace WitcherScriptMerger.Tools
 				var funcPos = funcMatch.Success ? funcMatch.Index : int.MaxValue;
 				var fieldPos = fieldLineStart ?? int.MaxValue;
 				var memberPos = memberMatch.Success ? memberMatch.Index : int.MaxValue;
+				var enumPos = enumMatch.Success ? enumMatch.Index : int.MaxValue;
 
-				if (funcPos == int.MaxValue && fieldPos == int.MaxValue && memberPos == int.MaxValue)
+				if (funcPos == int.MaxValue && fieldPos == int.MaxValue && memberPos == int.MaxValue && enumPos == int.MaxValue)
 					break;
 
 				// Earliest match wins. An @addField unit's own `var ...` line also
@@ -203,8 +225,10 @@ namespace WitcherScriptMerger.Tools
 				// earlier, so the field extraction always claims it first and consumes
 				// through the terminating ';' before the member scan can see it.
 				ScriptUnit unit;
-				if (fieldPos <= funcPos && fieldPos <= memberPos)
+				if (fieldPos <= funcPos && fieldPos <= memberPos && fieldPos <= enumPos)
 					unit = ExtractField(text, mask, lineStarts, fieldPos, cursor, typeRanges);
+				else if (enumPos < funcPos && enumPos <= memberPos)
+					unit = ExtractEnum(text, mask, enumMatch, cursor);
 				else if (memberPos < funcPos)
 					unit = ExtractMemberDeclaration(text, mask, memberMatch, cursor, typeRanges);
 				else
@@ -322,6 +346,34 @@ namespace WitcherScriptMerger.Tools
 			var name = nameMatch.Success ? nameMatch.Groups["name"].Value : "@addField#" + unitStart;
 
 			return new ScriptUnit(name, QualifyName(typeRanges, annotationLineStart, name), ScriptUnitKind.Field, hasBody: false, unitStart, unitEnd, fullText);
+		}
+
+		// A whole `enum Name { ... }` block as one unit - see
+		// ScriptUnitKind.EnumDeclaration's comment for why per-member extraction isn't
+		// viable and what silently broke while enums were gap territory. Keyed
+		// "enum:Name" so an enum can never collide with a same-named function's
+		// identity. Enums are top-level in WitcherScript, so no scope qualification.
+		static ScriptUnit ExtractEnum(string text, string mask, Match enumMatch, int cursor)
+		{
+			var unitStart = Math.Max(cursor, enumMatch.Index);
+
+			var openBrace = FindNextChar(mask, enumMatch.Index + enumMatch.Length, '{');
+			if (openBrace < 0)
+				throw new ExtractionException(
+					"Reached end of file looking for '{' after the enum declaration of '" +
+					enumMatch.Groups["name"].Value + "' starting at offset " + enumMatch.Index + ".");
+
+			var closeBrace = FindMatchingDelimiter(mask, openBrace, '{', '}');
+			if (closeBrace < 0)
+				throw new ExtractionException(
+					"Unbalanced braces in the body of enum '" + enumMatch.Groups["name"].Value +
+					"' starting at offset " + enumMatch.Index + ".");
+
+			var unitEnd = closeBrace + 1;
+			var name = "enum:" + enumMatch.Groups["name"].Value;
+			return new ScriptUnit(
+				name, name, ScriptUnitKind.EnumDeclaration, hasBody: true,
+				unitStart, unitEnd, text.Substring(unitStart, unitEnd - unitStart));
 		}
 
 		// A plain member declaration - see MemberDeclRegex for the shapes covered. The
