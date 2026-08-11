@@ -37,12 +37,17 @@ import main from './index';
 import { WITCHER3_GAME_ID } from './gating';
 
 /** A minimal stand-in for IExtensionContext - just enough surface for index.ts's own
- *  logic (context.once, context.api.getState/events.on/onAsync, context.registerAction -
- *  the last one added alongside resolveAction.ts's registration, called directly at
- *  `main()` time per IExtensionContext.once's own doc comment - see index.ts's own
- *  updated header comment for why that's NOT deferred through context.once), matching
- *  gating.test.ts's own fakeApi philosophy: a simplified fake, not a replica of
- *  Vortex's real context shape.
+ *  logic (context.once, context.api.getState/events.on/onAsync, context.registerAction/
+ *  registerDashlet - the register calls added alongside resolveAction.ts's and
+ *  mergeHistoryDashlet.ts's own registrations, both called directly at `main()` time per
+ *  IExtensionContext.once's own doc comment - see index.ts's own updated header comment
+ *  for why that's NOT deferred through context.once), matching gating.test.ts's own
+ *  fakeApi philosophy: a simplified fake, not a replica of Vortex's real context shape.
+ *
+ *  `registerDashlet` needs a real (no-op) implementation, not just a type - without this,
+ *  every test below would throw "context.registerDashlet is not a function" the moment
+ *  main(context) runs; mergeHistoryDashlet.test.ts covers registerMergeHistoryDashlet's
+ *  own argument-shape/gating behavior directly.
  *
  *  `profiles` backs `selectors.profileById` (via the shared `vortexApiStub.ts`) -
  *  `checkForConflictsAfterDeploy` (index.ts) resolves `did-deploy`'s own `profileId`
@@ -63,6 +68,10 @@ function fakeContext(initialActiveGameId: string | undefined, profiles: Record<s
       onceCallback = callback;
     },
     registerAction: registerActionMock,
+    registerDashlet: (..._args: unknown[]) => {
+      // Intentionally a no-op in tests - mergeHistoryDashlet.test.ts covers
+      // registerMergeHistoryDashlet's own argument-shape/gating behavior directly.
+    },
     api: {
       getState: () => state,
       events: {

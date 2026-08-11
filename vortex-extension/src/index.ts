@@ -2,6 +2,7 @@ import { log, selectors, types } from 'vortex-api';
 import { isWsmToolAcquired, scanWsmConflicts } from './conflictScan';
 import { isModOrDependencyInstallActive, notifyConflictsIfChanged } from './conflictNotifications';
 import { isWitcher3Active, WITCHER3_GAME_ID } from './gating';
+import { registerMergeHistoryDashlet } from './mergeHistoryDashlet';
 import { registerResolveScriptConflictsAction } from './resolveAction';
 import { ensureWsmToolRegistered } from './toolAcquisition';
 
@@ -39,21 +40,23 @@ import { ensureWsmToolRegistered } from './toolAcquisition';
  * onDidDeploy(context.api))`) both register it that way - see this unit's PR
  * description for the exact citations.
  *
- * This unit (the resolve action) adds the third real registration:
- * `registerResolveScriptConflictsAction` (`./resolveAction`), called directly in `main`,
- * alongside every other `context.register*` call - NOT inside the `context.once(...)`
- * callback below: `IExtensionContext.once`'s own doc comment (`lib/api.d.ts`) says
- * registration calls are expected to have already happened by the time `once` fires
- * ("if your extension registers its own extension function... those registrations
- * happen before once is called"), matching every `registerAction` call site found in
- * Vortex's own extensions (`gh search code 'registerAction("mod-icons"'
- * --repo Nexus-Mods/Vortex`) - none of them defer through `once`. Each registration
- * instead gates on `isWitcher3Active` (imported from `./gating`) via its own
- * `condition` callback, so a live game-mode switch is honored without requiring a
- * Vortex restart - see `resolveAction.ts`'s own doc comment for how this unit's own
- * action does exactly that, the declarative counterpart to how `tryRegisterWsmTool`
- * below re-checks the same condition imperatively on every `'gamemode-activated'`
- * event.
+ * This unit (the merge-history dashlet) adds the third real registration:
+ * `registerMergeHistoryDashlet` (`./mergeHistoryDashlet`), called directly in `main`,
+ * NOT deferred into the `context.once(...)` callback below - `IExtensionContext.once`'s
+ * own doc comment (`@nexusmods/vortex-api`'s `lib/api.d.ts`) says registration calls are
+ * expected to have already happened by the time `once` fires, matching every
+ * `registerDashlet`/`registerAction` call site in Vortex's own built-in extensions
+ * (none of them defer through `once`). Each registration instead gates on
+ * `isWitcher3Active` (imported from `./gating`) via its own `condition`/`isVisible`
+ * callback, so a live game-mode switch is honored without requiring a Vortex restart -
+ * the declarative counterpart to how `tryRegisterWsmTool` below re-checks the same
+ * condition imperatively on every `'gamemode-activated'` event.
+ *
+ * This unit (the resolve action) adds the fourth real registration:
+ * `registerResolveScriptConflictsAction` (`./resolveAction`), called directly in `main`
+ * alongside `registerMergeHistoryDashlet` above, following the exact same
+ * directly-in-`main`, gate-on-`isWitcher3Active`-via-`condition` pattern - see
+ * `resolveAction.ts`'s own doc comment for how this unit's own action does exactly that.
  *
  * This extension must never call `context.registerGame('witcher3', ...)` - Vortex's own
  * built-in `game-witcher3` extension already owns that registration; this extension is a
@@ -160,6 +163,12 @@ function main(context: types.IExtensionContext): boolean {
       });
     }
   }
+
+  // Registered synchronously here, not inside context.once below - see
+  // mergeHistoryDashlet.ts's own registerMergeHistoryDashlet doc comment for why a
+  // register call specifically must not be deferred into once, unlike
+  // tryRegisterWsmTool's legitimate use of once just above.
+  registerMergeHistoryDashlet(context);
 
   context.once(() => {
     tryRegisterWsmTool();
