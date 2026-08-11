@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -6,11 +6,11 @@
     <RootNamespace>WitcherScriptMerger.Headless</RootNamespace>
     <AssemblyName>WitcherScriptMerger.Headless</AssemblyName>
     <!-- Matches WitcherScriptMerger/Properties/AssemblyInfo.cs's hand-maintained
-         AssemblyVersion/AssemblyFileVersion ("0.6.2") - that project has
+         AssemblyVersion/AssemblyFileVersion ("0.6.3") - that project has
          GenerateAssemblyInfo=false (see its CLAUDE.md), so it can't pick up this
          property; this one has no such override, so GenerateAssemblyInfo (default true)
          stamps AssemblyVersion/AssemblyFileVersion/AssemblyInformationalVersion from it. -->
-    <Version>0.6.2</Version>
+    <Version>0.6.3</Version>
     <!-- The SDK default appends "+<git commit sha>" to AssemblyInformationalVersion.
          Suppressed so VersionInfo.GetVersion() (Core) prints exactly this <Version>
          value (or whatever -p:Version= a release build passes) - matching, not just
