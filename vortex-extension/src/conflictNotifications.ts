@@ -142,8 +142,16 @@ export function isModOrDependencyInstallActive(api: types.IExtensionApi): boolea
  *  session with zero conflicts matches the "nothing changed" early-return below and
  *  never calls `dismissNotification` for an id that was never sent (harmless against
  *  the real Vortex API, which no-ops on an unknown id, but pointless noise otherwise).
- *  Exported reset hook is for test isolation only - no production caller should ever
- *  need it. */
+ *
+ *  **Exported reset hook now has a real production caller, not just test isolation**
+ *  (correcting this comment's own earlier claim otherwise): `coexistenceGuard.ts`'s
+ *  `checkCoexistenceDrift` calls this when it detects WSM's merge state changed outside
+ *  this extension (Unit K) - a stale `alreadyResolved`-based signature is no longer
+ *  trustworthy once the underlying merge state it was computed against has moved, so the
+ *  next `did-deploy` needs a fair chance to re-notify rather than matching a signature
+ *  that predates the external change. Test suites still call it for isolation between
+ *  cases too (see this file's own tests' `beforeEach`), which is the *original* reason
+ *  this was exported - just no longer the only one. */
 let lastNotifiedSignature = '';
 
 export function resetConflictNotificationState(): void {

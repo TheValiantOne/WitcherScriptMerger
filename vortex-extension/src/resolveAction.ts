@@ -1,7 +1,8 @@
 import { log, selectors, types } from 'vortex-api';
+import { checkCoexistenceDrift, computeMergeStateSnapshot, recordOwnMergeStateSnapshot } from './coexistenceGuard';
 import { WSM_TOOL_ID } from './discoveredTool';
 import { isWitcher3Active, WITCHER3_GAME_ID } from './gating';
-import { MergeConflictsArgs, MergeConflictsResult, WsmMcpClient, WsmMcpClientOptions } from './mcpClient';
+import { GetStatusResult, ListMergesResult, MergeConflictsArgs, MergeConflictsResult, WsmMcpClient, WsmMcpClientOptions } from './mcpClient';
 import { buildMergeSummaryDialogContent } from './mergePanel';
 import { mergeWithProcessEnv } from './wsmEnv';
 
@@ -44,9 +45,19 @@ const ACTIVITY_NOTIFICATION_ID = 'witcherscriptmerger-vortex-resolve-conflicts-a
 
 /** The subset of `WsmMcpClient` this file actually needs - lets unit tests inject a
  *  fake without spawning a real WSM process (mirrors `toolAcquisition.ts`'s own
- *  `client`/`extractor` test seams). */
+ *  `client`/`extractor` test seams).
+ *
+ *  `getStatus`/`listMerges` were added alongside Unit K (coexistence & Collections
+ *  handling) - not because this file calls the underlying MCP tools directly, but
+ *  because `runMergeConflictsWorkflow` passes the already-open client straight into
+ *  `coexistenceGuard.ts`'s `computeMergeStateSnapshot(client: MergeStateClient)`, which
+ *  needs both. Reusing the same already-connected client (rather than opening a third
+ *  one just for this) is the entire point - see that function's own doc comment on why
+ *  it takes a client instead of connecting its own. */
 export interface WsmMergeClient {
   mergeConflicts(args?: MergeConflictsArgs): Promise<MergeConflictsResult>;
+  getStatus(): Promise<GetStatusResult>;
+  listMerges(): Promise<ListMergesResult>;
   close(): Promise<void>;
 }
 
@@ -194,7 +205,56 @@ async function runMergeConflictsWorkflow(
   try {
     const client = await connect({ exePath, env });
     try {
-      return await client.mergeConflicts(args);
+      const result = await client.mergeConflicts(args);
+
+      // Unit K: reconciles coexistenceGuard.ts's own "last known merge state" against
+      // this extension's own just-completed workflow, using the same still-open client
+      // (no extra spawn). Deliberately non-fatal (never lets a failure here affect the
+      // result the user is about to see) either way, but the *two* calls below are not
+      // interchangeable - which one runs depends on whether this was the dry-run preview
+      // or the real, confirmed merge:
+      //
+      // - Real merge (`args.dryRun !== true`): `recordOwnMergeStateSnapshot` - silently
+      //   adopts the post-merge state as the new baseline, no comparison, no notification.
+      //   This extension itself just wrote that state, so it's known-good by definition;
+      //   without this, this extension's own successful merge would look identical to
+      //   external interference the next time a trigger point (did-deploy,
+      //   profile-did-change, gamemode-activated) re-checks, since a genuine merge does
+      //   change both signals `computeMergeStateSnapshot` compares.
+      // - Dry-run preview (`args.dryRun === true`): `checkCoexistenceDrift` instead -
+      //   compares against the existing baseline and warns if it's already diverged
+      //   *before* this workflow ever wrote anything. **Not** a silent re-baseline here:
+      //   a dry run performs no write (`WsmMcpTools.MergeConflicts`'s own `dryRun`
+      //   contract), so if the two differ, that's evidence of drift that happened
+      //   *before* the user even opened this dialog - silently adopting the preview's
+      //   read as the new "known good" baseline (as an earlier version of this code did)
+      //   would erase that evidence permanently, including for a user who previews and
+      //   then cancels without merging anything at all. Caught in code review: a
+      //   preview-then-cancel workflow was silently absorbing real drift into the
+      //   baseline with no notification ever shown, defeating this unit's entire purpose
+      //   for exactly that sequence.
+      try {
+        const snapshot = await computeMergeStateSnapshot(client);
+        // `!== true`, not `=== false`: `MergeConflictsArgs.dryRun` is optional, and the
+        // server-side tool's own default when omitted is a *real* merge
+        // (`WsmMcpTools.MergeConflicts(..., bool dryRun = false)`) - so an omitted value
+        // must land on the "real merge" branch below, matching that server default,
+        // rather than being misread as a preview merely because it isn't literally
+        // `=== false`. Both of this file's own call sites always pass an explicit
+        // `dryRun: true`/`dryRun: false` today, so this only matters for a hypothetical
+        // future caller that omits it.
+        if (args.dryRun !== true) {
+          recordOwnMergeStateSnapshot(snapshot);
+        } else {
+          checkCoexistenceDrift(api, snapshot);
+        }
+      } catch (err) {
+        log('debug', 'witcherscriptmerger-vortex: failed to reconcile the coexistence-guard baseline after a resolve-script-conflicts workflow', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+
+      return result;
     } finally {
       await client.close();
     }
