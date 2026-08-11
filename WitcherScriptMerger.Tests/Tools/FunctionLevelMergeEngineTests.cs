@@ -571,6 +571,41 @@ namespace WitcherScriptMerger.Tests.Tools
 			Assert.True(FunctionLevelMergeEngine.ValidateWholeFileMergeOutput("<a/>", "<b/>", "<c/>", "<d/>", "x.xml", out _));
 		}
 
+		// The combat.ws shape: a clean-looking splice duplicated a LOCAL declaration
+		// inside a function body - invisible to unit-level counts, fatal at compile
+		// ("Variable 'mCSMCR' is already defined").
+		[Fact]
+		public void ValidateWholeFileMergeOutput_DetectsDuplicatedLocalVarInsideAFunction()
+		{
+			var baseText = Fn("A", "\tvar x : int;\r\n\tx = 1;\r\n");
+			var oldText = Fn("A", "\tvar x : int;\r\n\tvar mCS : CCS;\r\n\tx = 1;\r\n");
+			var corrupted = Fn("A", "\tvar x : int;\r\n\tvar mCS : CCS;\r\n\tvar mCS : CCS;\r\n\tx = 1;\r\n");
+
+			Assert.False(FunctionLevelMergeEngine.ValidateWholeFileMergeOutput(baseText, oldText, baseText, corrupted, "x.ws", out var violation));
+			Assert.Contains("mCS", violation);
+		}
+
+		// An input that itself declares a local twice is tolerated when the merge
+		// carries it through unchanged - the invariant only flags duplication the
+		// merge INTRODUCED.
+		[Fact]
+		public void ValidateWholeFileMergeOutput_ToleratesPreexistingDuplicateLocalFromAnInput()
+		{
+			var baseText = Fn("A", "\tvar x : int;\r\n");
+			var oldText = Fn("A", "\tvar x : int;\r\n\tvar mCS : CCS;\r\n\tvar mCS : CCS;\r\n");
+
+			Assert.True(FunctionLevelMergeEngine.ValidateWholeFileMergeOutput(baseText, oldText, baseText, oldText, "x.ws", out _));
+		}
+
+		[Fact]
+		public void HasDuplicatedLocalVarDecls_IgnoresCommentedOutDeclarations()
+		{
+			var merged = Fn("A", "\tvar x : int;\r\n\t// var x : int;\r\n");
+			var input = Fn("A", "\tvar x : int;\r\n");
+
+			Assert.False(FunctionLevelMergeEngine.HasDuplicatedLocalVarDecls(merged, input, input, input, out _));
+		}
+
 		#endregion
 	}
 }

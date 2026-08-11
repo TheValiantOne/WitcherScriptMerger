@@ -342,7 +342,20 @@ namespace WitcherScriptMerger.Tools
 			}
 
 			if (mergeResult.HasValue && !mergeResult.Value.HasConflicts)
-				return mergeResult.Value.MergedText;
+			{
+				// DiffPlex's silent bug operates at line granularity too: a clean-looking
+				// per-function splice can duplicate a local declaration (observed live -
+				// see LocalVarDeclRegex's comment). A duplicated local is invalid
+				// WitcherScript, and the whole-function tiebreak below is always a valid
+				// alternative - one side's intact function, never a splice.
+				if (!HasDuplicatedLocalVarDecls(mergeResult.Value.MergedText, baseText, oldText, newText, out var dupLocal))
+					return mergeResult.Value.MergedText;
+
+				decisions.Add(
+					$"{baseUnit.DescribeKind()} {baseUnit.Name}: the fine-grained 3-way merge silently duplicated " +
+					$"local variable '{dupLocal}' (a known DiffPlex failure mode) - used the whole-function " +
+					"tiebreak below instead of the spliced result.");
+			}
 
 			var oldDistinctness = ComputeDistinctness(baseText, oldText);
 			var newDistinctness = ComputeDistinctness(baseText, newText);
@@ -599,6 +612,74 @@ namespace WitcherScriptMerger.Tools
 
 		#region Output sanity gate
 
+		// Local `var` declarations inside a unit's text, counted by name. The invariant
+		// this feeds exists because DiffPlex's silent duplication operates at LINE
+		// granularity: a splice inside a function body can duplicate a local
+		// declaration (observed live: `var mCSMCR : CCSMCR;` emitted twice inside
+		// combat.ws's OnUpdate locals -> "Variable 'mCSMCR' is already defined" at
+		// compile), which no unit-level count can see. Counted over comment-stripped
+		// text so a commented-out declaration can't skew the tally; multi-declarator
+		// lines count each name.
+		static readonly Regex LocalVarDeclRegex = new Regex(
+			@"^\s*var\s+(?<names>\w+(?:\s*,\s*\w+)*)\s*:", RegexOptions.Compiled | RegexOptions.Multiline);
+
+		static Dictionary<string, int> CountLocalVarDecls(string unitText)
+		{
+			var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+			string stripped;
+			try
+			{
+				stripped = ScriptUnitExtractor.StripComments(unitText);
+			}
+			catch (ScriptUnitExtractor.ExtractionException)
+			{
+				stripped = unitText;
+			}
+			foreach (Match m in LocalVarDeclRegex.Matches(stripped))
+			{
+				foreach (var raw in m.Groups["names"].Value.Split(','))
+				{
+					var name = raw.Trim();
+					if (name.Length == 0)
+						continue;
+					counts.TryGetValue(name, out var n);
+					counts[name] = n + 1;
+				}
+			}
+			return counts;
+		}
+
+		// True when mergedUnitText declares some local var name more often than ANY of
+		// the input versions of the same unit do - the line-level silent-duplication
+		// signature. Inputs that don't contain this unit pass null.
+		public static bool HasDuplicatedLocalVarDecls(
+			string mergedUnitText, string baseUnitText, string oldUnitText, string newUnitText, out string duplicatedName)
+		{
+			duplicatedName = null;
+			var mergedCounts = CountLocalVarDecls(mergedUnitText);
+			if (mergedCounts.Count == 0)
+				return false;
+			var baseCounts = baseUnitText == null ? null : CountLocalVarDecls(baseUnitText);
+			var oldCounts = oldUnitText == null ? null : CountLocalVarDecls(oldUnitText);
+			var newCounts = newUnitText == null ? null : CountLocalVarDecls(newUnitText);
+
+			int At(Dictionary<string, int> counts, string name) =>
+				counts != null && counts.TryGetValue(name, out var n) ? n : 0;
+
+			foreach (var (name, count) in mergedCounts)
+			{
+				if (count <= 1)
+					continue;
+				var maxInput = Math.Max(At(baseCounts, name), Math.Max(At(oldCounts, name), At(newCounts, name)));
+				if (count > maxInput)
+				{
+					duplicatedName = name;
+					return true;
+				}
+			}
+			return false;
+		}
+
 		// Validates a whole-file "clean" merge's output against the three inputs it was
 		// built from - the guard for DiffPlex's SILENT ThreeWayDiffer failure mode
 		// (no exception, no conflict block, but content lost or duplicated; see
@@ -634,23 +715,27 @@ namespace WitcherScriptMerger.Tools
 				return false;
 			}
 
-			Dictionary<string, int> Counts(string text)
+			(Dictionary<string, int> counts, Dictionary<string, string> firstTexts) Index(string text)
 			{
 				var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+				var firstTexts = new Dictionary<string, string>(StringComparer.Ordinal);
 				foreach (var unit in ScriptUnitExtractor.Extract(text).Units)
 				{
 					counts.TryGetValue(unit.ScopedName, out var n);
 					counts[unit.ScopedName] = n + 1;
+					if (n == 0)
+						firstTexts[unit.ScopedName] = unit.FullText;
 				}
-				return counts;
+				return (counts, firstTexts);
 			}
 
 			Dictionary<string, int> baseCounts, oldCounts, newCounts, mergedCounts;
+			Dictionary<string, string> baseTexts, oldTexts, newTexts, mergedTexts;
 			try
 			{
-				baseCounts = Counts(baseText);
-				oldCounts = Counts(oldText);
-				newCounts = Counts(newText);
+				(baseCounts, baseTexts) = Index(baseText);
+				(oldCounts, oldTexts) = Index(oldText);
+				(newCounts, newTexts) = Index(newText);
 			}
 			catch (ScriptUnitExtractor.ExtractionException)
 			{
@@ -658,7 +743,7 @@ namespace WitcherScriptMerger.Tools
 			}
 			try
 			{
-				mergedCounts = Counts(mergedText);
+				(mergedCounts, mergedTexts) = Index(mergedText);
 			}
 			catch (ScriptUnitExtractor.ExtractionException ex)
 			{
@@ -667,6 +752,7 @@ namespace WitcherScriptMerger.Tools
 			}
 
 			int At(Dictionary<string, int> counts, string name) => counts.TryGetValue(name, out var n) ? n : 0;
+			string TextAt(Dictionary<string, string> texts, string name) => texts.TryGetValue(name, out var t) ? t : null;
 
 			foreach (var (name, mergedCount) in mergedCounts)
 			{
@@ -687,6 +773,20 @@ namespace WitcherScriptMerger.Tools
 				if (required && At(mergedCounts, name) == 0)
 				{
 					violation = $"'{name}' is present in {(inOld && inNew ? "both inputs" : "an input that inserted it")} but missing from the merged output (lost)";
+					return false;
+				}
+			}
+
+			// Line-level: DiffPlex's silent duplication can strike INSIDE a function
+			// body too, duplicating a local declaration a unit-count invariant can't
+			// see (observed live - see LocalVarDeclRegex's comment). Each merged unit's
+			// local-var-declaration counts must not exceed every input version's.
+			foreach (var (name, mergedUnitText) in mergedTexts)
+			{
+				if (HasDuplicatedLocalVarDecls(
+					mergedUnitText, TextAt(baseTexts, name), TextAt(oldTexts, name), TextAt(newTexts, name), out var dupLocal))
+				{
+					violation = $"local variable '{dupLocal}' is declared more than once inside '{name}' in the merged output but not in any input (duplicated splice)";
 					return false;
 				}
 			}
