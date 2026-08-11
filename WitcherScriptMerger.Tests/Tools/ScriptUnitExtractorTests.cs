@@ -170,20 +170,28 @@ namespace WitcherScriptMerger.Tests.Tools
 			var doc = ScriptUnitExtractor.Extract(text);
 
 			Assert.Equal(text, ScriptUnitExtractor.Reassemble(doc));
-			Assert.Equal(new[] { "A", "B" }, doc.Units.Select(u => u.Name));
-			Assert.Equal(3, doc.Gaps.Count);
+			// "var x : int;" is a MemberDeclaration unit too (gap-handling v2 - see
+			// docs/bugs/function-level-merge-gap-handling.md defect 2), so three units
+			// come back, in file order, all scope-qualified by the enclosing class.
+			Assert.Equal(new[] { "x", "A", "B" }, doc.Units.Select(u => u.Name));
+			Assert.Equal(new[] { "Foo::x", "Foo::A", "Foo::B" }, doc.Units.Select(u => u.ScopedName));
+			Assert.Equal(4, doc.Gaps.Count);
 		}
 
 		[Fact]
-		public void Extract_NoFunctionsAtAll_ReturnsSingleGapAndRoundTrips()
+		public void Extract_OnlyMemberDeclarations_ExtractedAsScopedUnitsAndRoundTrips()
 		{
 			var text = "class Foo\r\n{\r\n\tvar x : int;\r\n\tvar y : int;\r\n}\r\n";
 
 			var doc = ScriptUnitExtractor.Extract(text);
 
+			// Plain member declarations are units now (gap-handling v2): a mod adding
+			// one to a vanilla class must participate in per-unit resolution rather
+			// than being silently dropped with vanilla's gap text - see
+			// docs/bugs/function-level-merge-gap-handling.md defect 2.
 			Assert.Equal(text, ScriptUnitExtractor.Reassemble(doc));
-			Assert.Empty(doc.Units);
-			Assert.Single(doc.Gaps);
+			Assert.Equal(new[] { "Foo::x", "Foo::y" }, doc.Units.Select(u => u.ScopedName));
+			Assert.All(doc.Units, u => Assert.Equal(ScriptUnitKind.MemberDeclaration, u.Kind));
 		}
 
 		[Fact]
@@ -237,5 +245,121 @@ namespace WitcherScriptMerger.Tests.Tools
 			Assert.Contains("keep { this }", stripped);
 			Assert.Equal(text.Split('\n').Length, stripped.Split('\n').Length);
 		}
+
+		#region Member declarations & scoping (gap-handling v2)
+
+		[Fact]
+		public void Extract_DefaultStatement_IsItsOwnUnitDistinctFromTheVariable()
+		{
+			var text = "class Foo\r\n{\r\n\tvar d : float;\r\n\tdefault d = 4.5f;\r\n}\r\n";
+
+			var doc = ScriptUnitExtractor.Extract(text);
+
+			Assert.Equal(text, ScriptUnitExtractor.Reassemble(doc));
+			// The declaration and its default are separate statements a mod can edit
+			// independently - separate units with distinct identities.
+			Assert.Equal(new[] { "Foo::d", "Foo::default:d" }, doc.Units.Select(u => u.ScopedName));
+		}
+
+		[Fact]
+		public void Extract_MultiDeclaratorVarLine_OneUnitKeyedByJoinedNames()
+		{
+			var text = "class Foo\r\n{\r\n\tprivate var a, b : int;\r\n}\r\n";
+
+			var doc = ScriptUnitExtractor.Extract(text);
+
+			Assert.Equal(text, ScriptUnitExtractor.Reassemble(doc));
+			var unit = Assert.Single(doc.Units);
+			Assert.Equal("Foo::a,b", unit.ScopedName);
+		}
+
+		[Fact]
+		public void Extract_SameMemberNameInTwoClasses_ScopedNamesDiffer()
+		{
+			var text =
+				"class Foo\r\n{\r\n\tvar owner : int;\r\n}\r\n\r\n" +
+				"class Bar\r\n{\r\n\tvar owner : int;\r\n}\r\n";
+
+			var doc = ScriptUnitExtractor.Extract(text);
+
+			Assert.Equal(text, ScriptUnitExtractor.Reassemble(doc));
+			// Bare names collide; scoped names must not - this is what stops the
+			// aligner from matching Foo's member against Bar's.
+			Assert.Equal(new[] { "Foo::owner", "Bar::owner" }, doc.Units.Select(u => u.ScopedName));
+		}
+
+		[Fact]
+		public void Extract_LocalVariablesInsideFunctionBodies_AreNotUnits()
+		{
+			var text =
+				"class Foo\r\n{\r\n\tfunction A()\r\n\t{\r\n\t\tvar local : int;\r\n\t\tlocal = 1;\r\n\t}\r\n}\r\n";
+
+			var doc = ScriptUnitExtractor.Extract(text);
+
+			Assert.Equal(text, ScriptUnitExtractor.Reassemble(doc));
+			// The function body is consumed wholesale; the local var inside it must
+			// never surface as its own unit.
+			var unit = Assert.Single(doc.Units);
+			Assert.Equal("Foo::A", unit.ScopedName);
+		}
+
+		[Fact]
+		public void Extract_StateHeader_ScopeIncludesParentClass()
+		{
+			var text =
+				"state Combat in CR4Player\r\n{\r\n\tvar phase : int;\r\n}\r\n";
+
+			var doc = ScriptUnitExtractor.Extract(text);
+
+			Assert.Equal(text, ScriptUnitExtractor.Reassemble(doc));
+			var unit = Assert.Single(doc.Units);
+			// Same state name recurs across parent classes in real game scripts, so
+			// the parent is part of the scope identity.
+			Assert.Equal("Combat@CR4Player::phase", unit.ScopedName);
+		}
+
+		[Fact]
+		public void Extract_StructMember_ScopedToStruct()
+		{
+			var text = "struct SPoint\r\n{\r\n\tvar x : float;\r\n\tvar y : float;\r\n}\r\n";
+
+			var doc = ScriptUnitExtractor.Extract(text);
+
+			Assert.Equal(text, ScriptUnitExtractor.Reassemble(doc));
+			Assert.Equal(new[] { "SPoint::x", "SPoint::y" }, doc.Units.Select(u => u.ScopedName));
+		}
+
+		[Fact]
+		public void Extract_GlobalFunctionAfterClass_NotScopedToTheClass()
+		{
+			var text =
+				"class Foo\r\n{\r\n\tfunction A()\r\n\t{\r\n\t\treturn;\r\n\t}\r\n}\r\n\r\n" +
+				"exec function E()\r\n{\r\n\treturn;\r\n}\r\n";
+
+			var doc = ScriptUnitExtractor.Extract(text);
+
+			Assert.Equal(text, ScriptUnitExtractor.Reassemble(doc));
+			Assert.Equal(new[] { "Foo::A", "E" }, doc.Units.Select(u => u.ScopedName));
+		}
+
+		[Fact]
+		public void Extract_AddFieldUnit_StillWinsOverPlainMemberScanForItsOwnVarLine()
+		{
+			var text =
+				"@addField(CR4Player)\r\nprivate var injected : bool;\r\n\r\n" +
+				"@wrapMethod(CR4Player)\r\nfunction Wrapped()\r\n{\r\n\treturn;\r\n}\r\n";
+
+			var doc = ScriptUnitExtractor.Extract(text);
+
+			Assert.Equal(text, ScriptUnitExtractor.Reassemble(doc));
+			Assert.Equal(2, doc.Units.Count);
+			// The @addField's own var line must not double-extract as a plain member
+			// declaration - the annotation-led Field unit claims it first.
+			Assert.Equal(ScriptUnitKind.Field, doc.Units[0].Kind);
+			Assert.Equal("injected", doc.Units[0].Name);
+			Assert.Equal(ScriptUnitKind.Function, doc.Units[1].Kind);
+		}
+
+		#endregion
 	}
 }

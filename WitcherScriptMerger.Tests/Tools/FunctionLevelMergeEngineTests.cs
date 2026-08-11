@@ -313,5 +313,158 @@ namespace WitcherScriptMerger.Tests.Tools
 			Assert.True(result.Applied);
 			Assert.Single(result.Decisions);
 		}
+
+		#region Gap-handling v2 (docs/bugs/function-level-merge-gap-handling.md)
+
+		// Defect 1's exact shape: a mod appends new members at the END of a class, so
+		// its insertions align to the slot between vanilla's last class member and the
+		// next global-scope unit - and vanilla's gap at that slot contains the
+		// class-closing brace. The old emission appended the inserted units AFTER that
+		// brace (global scope, "'public' has no sense for global function ...") with
+		// their separators eaten. The fix emits the inserting side's own span, keeping
+		// both position and separators.
+		[Fact]
+		public void TryMerge_ModAppendsMembersAtClassEnd_InsertedInsideClassNotAfterClosingBrace()
+		{
+			var baseText =
+				"class C\r\n{\r\n\tfunction A()\r\n\t{\r\n\t\treturn;\r\n\t}\r\n}\r\n\r\n" +
+				"exec function E()\r\n{\r\n\treturn;\r\n}\r\n";
+			var oldText =
+				"class C\r\n{\r\n\tfunction A()\r\n\t{\r\n\t\treturn;\r\n\t}\r\n\r\n" +
+				"\tfunction B()\r\n\t{\r\n\t\treturn;\r\n\t}\r\n\r\n" +
+				"\tprivate var voiceLast : float;\r\n}\r\n\r\n" +
+				"exec function E()\r\n{\r\n\treturn;\r\n}\r\n";
+
+			var result = Merge(baseText, oldText, baseText);
+
+			Assert.True(result.Applied);
+			// The inserting side's span is emitted verbatim, so with the other side
+			// untouched the whole file should equal the inserting side's own text.
+			Assert.Equal(oldText, result.MergedText);
+			// Belt and braces: the inserted declaration sits BEFORE the class-closing
+			// brace, and nothing got mangled onto a brace line.
+			var closingBrace = result.MergedText.IndexOf("\r\n}", System.StringComparison.Ordinal);
+			Assert.True(result.MergedText.IndexOf("voiceLast", System.StringComparison.Ordinal) < result.MergedText.LastIndexOf("}\r\n\r\nexec", System.StringComparison.Ordinal));
+			Assert.True(FunctionLevelMergeEngine.PassesReassemblySanityGate(result.MergedText, out _));
+		}
+
+		// Defect 2's exact shape: one mod adds a plain member declaration (previously
+		// gap content, silently reverted to vanilla), the other edits a different
+		// function. Both changes must survive.
+		[Fact]
+		public void TryMerge_OneModAddsMemberDeclarationOtherEditsFunction_BothSurvive()
+		{
+			var baseText =
+				"class C\r\n{\r\n\tfunction A()\r\n\t{\r\n\t\treturn;\r\n\t}\r\n\r\n" +
+				"\tfunction B()\r\n\t{\r\n\t\tx = 1;\r\n\t}\r\n}\r\n";
+			var oldText =
+				"class C\r\n{\r\n\tprivate var mCS : int;\r\n\r\n\tfunction A()\r\n\t{\r\n\t\treturn;\r\n\t}\r\n\r\n" +
+				"\tfunction B()\r\n\t{\r\n\t\tx = 1;\r\n\t}\r\n}\r\n";
+			var newText =
+				"class C\r\n{\r\n\tfunction A()\r\n\t{\r\n\t\treturn;\r\n\t}\r\n\r\n" +
+				"\tfunction B()\r\n\t{\r\n\t\tx = 2;\r\n\t}\r\n}\r\n";
+
+			var result = Merge(baseText, oldText, newText);
+
+			Assert.True(result.Applied);
+			Assert.Contains("private var mCS : int;", result.MergedText);
+			Assert.Contains("x = 2;", result.MergedText);
+			Assert.True(FunctionLevelMergeEngine.PassesReassemblySanityGate(result.MergedText, out _));
+		}
+
+		// A mod CHANGING a default value (not just adding one) now resolves through
+		// per-unit resolution: only one side touched it, so that side wins - no
+		// vanilla-gap revert, no note needed.
+		[Fact]
+		public void TryMerge_OneModChangesDefaultValue_ChangeSurvives()
+		{
+			var baseText = "class C\r\n{\r\n\tvar d : float;\r\n\tdefault d = 4.5f;\r\n\r\n\tfunction A()\r\n\t{\r\n\t\treturn;\r\n\t}\r\n}\r\n";
+			var oldText = baseText.Replace("default d = 4.5f;", "default d = 9.0f;");
+
+			var result = Merge(baseText, oldText, baseText);
+
+			Assert.True(result.Applied);
+			Assert.Contains("default d = 9.0f;", result.MergedText);
+			Assert.DoesNotContain("4.5f", result.MergedText);
+		}
+
+		[Fact]
+		public void TryMerge_BothSidesInsertAtSameGlobalSlot_BothEmittedOnSeparateLines()
+		{
+			var baseText = Fn("A", "\ta();\r\n") + "\r\n" + Fn("B", "\tb();\r\n");
+			var oldText = Fn("A", "\ta();\r\n") + "\r\n" + Fn("X", "\tx();\r\n") + "\r\n" + Fn("B", "\tb();\r\n");
+			var newText = Fn("A", "\ta();\r\n") + "\r\n" + Fn("Y", "\ty();\r\n") + "\r\n" + Fn("B", "\tb();\r\n");
+
+			var result = Merge(baseText, oldText, newText);
+
+			Assert.True(result.Applied);
+			Assert.Contains("function X()", result.MergedText);
+			Assert.Contains("function Y()", result.MergedText);
+			// Never two declarations run together on one line.
+			Assert.DoesNotContain("}function", result.MergedText);
+			Assert.True(FunctionLevelMergeEngine.PassesReassemblySanityGate(result.MergedText, out _));
+		}
+
+		// Both sides inserting into a slot whose vanilla gap carries a structural brace
+		// (a class boundary) has no safe placement answer - decline rather than guess.
+		[Fact]
+		public void TryMerge_BothSidesInsertAtClassBoundarySlot_Declines()
+		{
+			var baseText =
+				"class C\r\n{\r\n\tfunction A()\r\n\t{\r\n\t\treturn;\r\n\t}\r\n}\r\n\r\n" +
+				"exec function E()\r\n{\r\n\treturn;\r\n}\r\n";
+			var oldText = baseText.Replace(
+				"\t}\r\n}",
+				"\t}\r\n\r\n\tfunction FromOld()\r\n\t{\r\n\t\treturn;\r\n\t}\r\n}");
+			var newText = baseText.Replace(
+				"\t}\r\n}",
+				"\t}\r\n\r\n\tfunction FromNew()\r\n\t{\r\n\t\treturn;\r\n\t}\r\n}");
+
+			var result = Merge(baseText, oldText, newText);
+
+			Assert.False(result.Applied);
+		}
+
+		[Fact]
+		public void PassesReassemblySanityGate_MemberShapedDeclarationAtGlobalScope_Fails()
+		{
+			var text =
+				"class C\r\n{\r\n\tvar x : int;\r\n}\r\n\r\n" +
+				"\tpublic function Orphaned() : float\r\n\t{\r\n\t\treturn 1;\r\n\t}\r\n";
+
+			Assert.False(FunctionLevelMergeEngine.PassesReassemblySanityGate(text, out var reason));
+			Assert.Contains("global scope", reason);
+		}
+
+		// The bug's exact mangled shape: a declaration glued onto the tail of the
+		// class-closing-brace line ("}<TAB>private var q : int;").
+		[Fact]
+		public void PassesReassemblySanityGate_DeclarationMangledOntoClosingBraceLine_Fails()
+		{
+			var text = "class C\r\n{\r\n\tvar x : int;\r\n}\tprivate var q : int;\r\n";
+
+			Assert.False(FunctionLevelMergeEngine.PassesReassemblySanityGate(text, out var reason));
+			Assert.Contains("global scope", reason);
+		}
+
+		[Fact]
+		public void PassesReassemblySanityGate_ValidGlobalScopeShapes_Pass()
+		{
+			var text =
+				"statemachine class CR4Player extends CPlayer\r\n{\r\n\tprivate var x : int;\r\n\tdefault x = 1;\r\n}\r\n\r\n" +
+				"exec function foo()\r\n{\r\n\tvar local : int;\r\n\tlocal = 1;\r\n}\r\n\r\n" +
+				"function globalHelper() : bool\r\n{\r\n\treturn true;\r\n}\r\n";
+
+			Assert.True(FunctionLevelMergeEngine.PassesReassemblySanityGate(text, out _));
+		}
+
+		[Fact]
+		public void PassesReassemblySanityGate_UnbalancedBraces_Fails()
+		{
+			Assert.False(FunctionLevelMergeEngine.PassesReassemblySanityGate("class C\r\n{\r\n\tvar x : int;\r\n", out var reason));
+			Assert.Contains("unbalanced", reason);
+		}
+
+		#endregion
 	}
 }

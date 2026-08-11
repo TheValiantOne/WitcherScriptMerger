@@ -1,8 +1,13 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import * as React from 'react';
 import { selectors, types, util } from 'vortex-api';
 import { QUICKBMS_HOMEPAGE_URL } from './bundleTools';
 import { WITCHER3_GAME_ID } from './gating';
+import { DEFAULT_WSM_VERSION } from './githubRelease';
+import { acquireWsmTool, ensureWsmToolRegistered } from './toolAcquisition';
 import { WCC_LITE_NEXUS_MOD_URL, acquireWccLite } from './wccLiteAcquisition';
+import { setWsmToolPathOverride } from './wsmToolPath';
 import { WsmStatusSummary, getWsmStatusSummary } from './wsmStatusSummary';
 
 /**
@@ -86,6 +91,8 @@ export function WsmStatusDashletContent(props: WsmStatusDashletProps): React.Rea
   const [loading, setLoading] = React.useState<boolean>(true);
   const [wccLiteError, setWccLiteError] = React.useState<string | undefined>(undefined);
   const [fetchingWccLite, setFetchingWccLite] = React.useState<boolean>(false);
+  const [wsmActionError, setWsmActionError] = React.useState<string | undefined>(undefined);
+  const [fetchingWsm, setFetchingWsm] = React.useState<boolean>(false);
 
   // Guards every state setter below against firing after unmount. This dashlet's own
   // visibility (registerWsmStatusDashlet's isVisible, below) is tied to a *live*
@@ -120,12 +127,22 @@ export function WsmStatusDashletContent(props: WsmStatusDashletProps): React.Rea
       setFetchingWccLite(value);
     }
   }, []);
+  const setWsmActionErrorIfMounted = React.useCallback((value: string | undefined) => {
+    if (mountedRef.current) {
+      setWsmActionError(value);
+    }
+  }, []);
+  const setFetchingWsmIfMounted = React.useCallback((value: boolean) => {
+    if (mountedRef.current) {
+      setFetchingWsm(value);
+    }
+  }, []);
 
-  // Combined "something is in flight" flag, used to disable *both* buttons regardless
+  // Combined "something is in flight" flag, used to disable *all* buttons regardless
   // of which action started it - without this, clicking "Refresh" while "Get wcc_lite"
-  // is still running (or vice versa) could fire two overlapping WSM process
+  // (or the WSM download) is still running could fire two overlapping WSM process
   // spawns/MCP handshakes/mods-folder scans that race each other's setSummary() call.
-  const busy = loading || fetchingWccLite;
+  const busy = loading || fetchingWccLite || fetchingWsm;
 
   // Returns its own promise (rather than firing-and-forgetting internally) so
   // handleGetWccLite below can genuinely wait for the post-acquisition refresh to
@@ -157,6 +174,71 @@ export function WsmStatusDashletContent(props: WsmStatusDashletProps): React.Rea
       .finally(() => setFetchingWccLiteIfMounted(false));
   }, [api, refresh, setFetchingWccLiteIfMounted, setWccLiteErrorIfMounted]);
 
+  // The first-run download: the real GitHub-release acquisition pipeline
+  // (toolAcquisition.ts - download, extract, register as a discovered tool), pinned to
+  // DEFAULT_WSM_VERSION. This is the explicit user trigger index.ts's doc comment has
+  // referenced since Unit F - downloads stay a user action, never an automatic
+  // startup side effect.
+  const handleDownloadWsm = React.useCallback(() => {
+    setFetchingWsmIfMounted(true);
+    setWsmActionErrorIfMounted(undefined);
+    acquireWsmTool({ api, version: DEFAULT_WSM_VERSION })
+      .then(() => refresh())
+      .catch((err: unknown) => setWsmActionErrorIfMounted(err instanceof Error ? err.message : String(err)))
+      .finally(() => setFetchingWsmIfMounted(false));
+  }, [api, refresh, setFetchingWsmIfMounted, setWsmActionErrorIfMounted]);
+
+  // Points the extension at an existing WSM install instead of downloading one - the
+  // wsmToolPath.ts override. Validation lives here, next to the dialog that can
+  // explain a rejection: the path must exist and name a WitcherScriptMerger*.exe
+  // (either host works - the WinForms build also supports `mcp`), so a stray path to
+  // some unrelated executable can't be silently adopted.
+  const handleUseExisting = React.useCallback(() => {
+    setWsmActionErrorIfMounted(undefined);
+    const run = async (): Promise<void> => {
+      const result = await api.showDialog?.(
+        'question',
+        'Use an existing WitcherScriptMerger install',
+        {
+          text:
+            'Full path to a WitcherScriptMerger executable with MCP support ' +
+            '(WitcherScriptMerger.Headless.exe, or WitcherScriptMerger.exe from this ' +
+            "extension's own fork - the original 2016 Script Merger has no mcp mode " +
+            'and will not work):',
+          input: [{ id: 'wsmPath', type: 'text', value: '', label: 'Path to WitcherScriptMerger executable' }],
+        },
+        [{ label: 'Cancel' }, { label: 'Save', default: true }],
+      );
+      if (result?.action !== 'Save') {
+        return;
+      }
+      const chosen = String(result.input?.['wsmPath'] ?? '').trim();
+      const baseName = path.basename(chosen).toLowerCase();
+      if (!baseName.startsWith('witcherscriptmerger') || !baseName.endsWith('.exe')) {
+        setWsmActionErrorIfMounted(`Not a WitcherScriptMerger executable: ${chosen || '(empty)'}`);
+        return;
+      }
+      if (!fs.existsSync(chosen)) {
+        setWsmActionErrorIfMounted(`File not found: ${chosen}`);
+        return;
+      }
+      await setWsmToolPathOverride(api, chosen);
+      await ensureWsmToolRegistered(api);
+      await refresh();
+    };
+    run().catch((err: unknown) => setWsmActionErrorIfMounted(err instanceof Error ? err.message : String(err)));
+  }, [api, refresh, setWsmActionErrorIfMounted]);
+
+  // Clears a stale override (see wsmStatusSummary's 'override-missing' kind) -
+  // resolution falls back to the managed install, or to the not-acquired state.
+  const handleClearOverride = React.useCallback(() => {
+    setWsmActionErrorIfMounted(undefined);
+    setWsmToolPathOverride(api, null)
+      .then(() => ensureWsmToolRegistered(api))
+      .then(() => refresh())
+      .catch((err: unknown) => setWsmActionErrorIfMounted(err instanceof Error ? err.message : String(err)));
+  }, [api, refresh, setWsmActionErrorIfMounted]);
+
   const children: React.ReactNode[] = [
     React.createElement('h4', { key: 'title', style: { marginTop: 0 } }, 'WitcherScriptMerger Status'),
   ];
@@ -169,6 +251,42 @@ export function WsmStatusDashletContent(props: WsmStatusDashletProps): React.Rea
         'div',
         { key: 'not-acquired' },
         "WitcherScriptMerger hasn't been downloaded yet.",
+      ),
+      React.createElement(
+        'div',
+        { key: 'not-acquired-actions', style: { marginTop: '0.5em', display: 'flex', gap: '0.5em' } },
+        React.createElement(
+          'button',
+          { type: 'button', disabled: busy, onClick: handleDownloadWsm },
+          fetchingWsm ? 'Downloading...' : `Download WitcherScriptMerger v${DEFAULT_WSM_VERSION}`,
+        ),
+        React.createElement(
+          'button',
+          { type: 'button', disabled: busy, onClick: handleUseExisting },
+          'Use an existing install...',
+        ),
+      ),
+    );
+  } else if (summary?.kind === 'override-missing') {
+    children.push(
+      React.createElement(
+        'div',
+        { key: 'override-missing', style: { color: '#c0392b' } },
+        `The configured WitcherScriptMerger path no longer exists: ${summary.overridePath}`,
+      ),
+      React.createElement(
+        'div',
+        { key: 'override-missing-actions', style: { marginTop: '0.5em', display: 'flex', gap: '0.5em' } },
+        React.createElement(
+          'button',
+          { type: 'button', disabled: busy, onClick: handleClearOverride },
+          'Clear this path',
+        ),
+        React.createElement(
+          'button',
+          { type: 'button', disabled: busy, onClick: handleUseExisting },
+          'Choose a different path...',
+        ),
       ),
     );
   } else if (summary?.kind === 'error') {
@@ -218,6 +336,10 @@ export function WsmStatusDashletContent(props: WsmStatusDashletProps): React.Rea
     if (wccLiteError) {
       children.push(row('wccLiteError', 'wcc_lite download failed:', wccLiteError));
     }
+  }
+
+  if (wsmActionError) {
+    children.push(row('wsmActionError', 'WitcherScriptMerger setup failed:', wsmActionError));
   }
 
   children.push(

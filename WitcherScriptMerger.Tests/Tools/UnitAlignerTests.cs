@@ -7,13 +7,14 @@ namespace WitcherScriptMerger.Tests.Tools
 	// Regression coverage for UnitAligner - the function-level merge engine's
 	// vanilla-vs-one-side alignment (see WitcherScriptMerger.Core/CLAUDE.md once this
 	// lands there). Builds ScriptUnit fixtures directly via its public constructor
-	// (offsets/FullText are irrelevant to alignment, which only reads Name) rather than
-	// running the real extractor - keeps these fixtures focused purely on the
-	// alignment algorithm.
+	// (offsets/FullText are irrelevant to alignment, which only reads ScopedName)
+	// rather than running the real extractor - keeps these fixtures focused purely on
+	// the alignment algorithm. The fixtures pass the bare name as the scoped name too,
+	// which is exactly what the extractor produces for global-scope units.
 	public class UnitAlignerTests
 	{
 		static ScriptUnit Unit(string name) =>
-			new ScriptUnit(name, ScriptUnitKind.Function, hasBody: true, startOffset: 0, endOffset: 0, fullText: name);
+			new ScriptUnit(name, name, ScriptUnitKind.Function, hasBody: true, startOffset: 0, endOffset: 0, fullText: name);
 
 		static List<ScriptUnit> Units(params string[] names)
 		{

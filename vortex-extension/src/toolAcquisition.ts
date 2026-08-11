@@ -5,19 +5,23 @@ import { ArchiveExtractor, createVortexArchiveExtractor } from './archiveExtract
 import { buildWsmDiscoveredTool, registerWsmDiscoveredTool } from './discoveredTool';
 import { WITCHER3_GAME_ID } from './gating';
 import { buildAssetFileName, DEFAULT_WSM_REPO, downloadReleaseAsset, HttpClient, resolveReleaseAsset } from './githubRelease';
-import { getDownloadCacheDir, getWsmToolDir, INSTALLED_VERSION_FILENAME } from './storage';
+import { getDownloadCacheDir, getWsmToolDir, INSTALLED_VERSION_FILENAME, WSM_HEADLESS_EXE_NAME } from './storage';
+import { resolveWsmExePathIfUsable } from './wsmToolPath';
 import { buildWsmEnv } from './wsmEnv';
 
 /**
  * Orchestrates the full acquisition pipeline (download from GitHub Releases -> verify ->
  * extract -> register as a discovered tool) and a lighter local-only re-registration
- * path used at every Vortex startup. See this unit's PR description for exactly what's
- * verified end-to-end (a locally-built WSM binary standing in for a downloaded one, per
- * `test/toolAcquisition.integration.test.ts`) versus what's real-but-unexercised code
- * (the actual GitHub download - no release exists on this repo yet).
+ * path used at every Vortex startup. The end-to-end verified part is the
+ * extract/register pipeline (a locally-built WSM binary standing in for a downloaded
+ * one, per `test/toolAcquisition.integration.test.ts`); the actual GitHub download runs
+ * against the real v0.6.2 release (which exists now, with matching asset names) only
+ * outside the test suite - no test makes a real network call.
  */
 
-export const WSM_HEADLESS_EXE_NAME = 'WitcherScriptMerger.Headless.exe';
+// Moved to storage.ts (see its own comment on why); re-exported here so existing
+// importers keep working unchanged.
+export { WSM_HEADLESS_EXE_NAME } from './storage';
 
 export interface AcquireWsmToolOptions {
   api: types.IExtensionApi;
@@ -220,14 +224,17 @@ function registerAcquiredTool(api: types.IExtensionApi, exePath: string): void {
  * re-registering on every startup is the safe, idempotent default rather than assuming
  * a prior registration survived.
  *
- * Returns `false` (not an error) when nothing has been acquired yet - that's the
- * expected, normal state for as long as no GitHub Release exists.
+ * Returns `false` (not an error) when nothing has been acquired yet - the expected,
+ * normal state on a fresh install until the user triggers an acquisition.
  */
 export async function ensureWsmToolRegistered(api: types.IExtensionApi): Promise<boolean> {
-  const installDir = getWsmToolDir(api);
-  const exePath = path.join(installDir, WSM_HEADLESS_EXE_NAME);
-
-  if (!(await pathExists(exePath))) {
+  // Central resolution (wsmToolPath.ts): a user-set override wins over the managed
+  // install, and a stale override deliberately does NOT fall back to the managed copy
+  // (see that module's doc comment). Whatever resolves is what gets registered as the
+  // discovered tool - so resolveAction.ts's getDiscoveredWsmTool(api).path and every
+  // other consumer of the registration follow the same answer automatically.
+  const exePath = await resolveWsmExePathIfUsable(api);
+  if (exePath === undefined) {
     return false;
   }
 
