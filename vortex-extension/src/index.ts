@@ -15,13 +15,12 @@ import { ensureWsmToolRegistered } from './toolAcquisition';
  * This unit (tool acquisition) is the first to add real registration: re-registering a
  * previously-acquired WSM binary as a discovered tool, via `ensureWsmToolRegistered`
  * (`./toolAcquisition`) - a **local-only, network-free** check, safe to run
- * unconditionally on every load. Deliberately not an eager background *download* here:
- * as of this unit, no GitHub Release exists on this repo yet (see
- * `githubRelease.ts`'s own doc comment), so attempting one on every Vortex startup
- * would just be a guaranteed, noisy failure with nothing to show for it.
- * `./toolAcquisition`'s `acquireWsmTool` (the actual download/verify/extract/register
- * pipeline) is exported for a later unit's own UI trigger (a "Get WitcherScriptMerger"
- * action, once one exists) to call on explicit user request instead.
+ * unconditionally on every load. Deliberately not an eager background *download* here,
+ * even now that a real GitHub Release exists (v0.6.2): downloading is a network side
+ * effect a user should trigger explicitly, not something every Vortex startup performs
+ * unprompted. `./toolAcquisition`'s `acquireWsmTool` (the actual
+ * download/verify/extract/register pipeline) is exported for that explicit UI trigger
+ * (a "Get WitcherScriptMerger" action) to call on user request instead.
  *
  * Re-evaluated on every `'gamemode-activated'` event (`@nexusmods/vortex-api`'s own
  * README documents this event, firing with the newly-active game's id), not just once

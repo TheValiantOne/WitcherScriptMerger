@@ -11,10 +11,11 @@ import { buildWsmEnv } from './wsmEnv';
 /**
  * Orchestrates the full acquisition pipeline (download from GitHub Releases -> verify ->
  * extract -> register as a discovered tool) and a lighter local-only re-registration
- * path used at every Vortex startup. See this unit's PR description for exactly what's
- * verified end-to-end (a locally-built WSM binary standing in for a downloaded one, per
- * `test/toolAcquisition.integration.test.ts`) versus what's real-but-unexercised code
- * (the actual GitHub download - no release exists on this repo yet).
+ * path used at every Vortex startup. The end-to-end verified part is the
+ * extract/register pipeline (a locally-built WSM binary standing in for a downloaded
+ * one, per `test/toolAcquisition.integration.test.ts`); the actual GitHub download runs
+ * against the real v0.6.2 release (which exists now, with matching asset names) only
+ * outside the test suite - no test makes a real network call.
  */
 
 export const WSM_HEADLESS_EXE_NAME = 'WitcherScriptMerger.Headless.exe';
@@ -220,8 +221,8 @@ function registerAcquiredTool(api: types.IExtensionApi, exePath: string): void {
  * re-registering on every startup is the safe, idempotent default rather than assuming
  * a prior registration survived.
  *
- * Returns `false` (not an error) when nothing has been acquired yet - that's the
- * expected, normal state for as long as no GitHub Release exists.
+ * Returns `false` (not an error) when nothing has been acquired yet - the expected,
+ * normal state on a fresh install until the user triggers an acquisition.
  */
 export async function ensureWsmToolRegistered(api: types.IExtensionApi): Promise<boolean> {
   const installDir = getWsmToolDir(api);

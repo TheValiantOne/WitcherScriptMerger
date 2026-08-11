@@ -3,12 +3,11 @@ import * as https from 'https';
 
 /**
  * Download-from-GitHub-Releases logic for acquiring a WSM build. Parameterized on
- * `repo`/`tag` (never hardcoded beyond `DEFAULT_WSM_REPO`'s default) so it's genuinely
- * functional once a release actually exists - **as of this unit, no version tag has
- * been pushed to this repo, so no GitHub Release exists yet and this code path has
- * never been exercised against a real release; see this unit's PR description.**
- * Verified here only via `githubRelease.test.ts`'s mocked `HttpClient` - no real network
- * call is made by any test.
+ * `repo`/`tag` (never hardcoded beyond `DEFAULT_WSM_REPO`'s default). A real release
+ * now exists (v0.6.2, published 2026-08-11, with exactly the asset names this module
+ * expects), so this path is exercisable for real - unit tests still go through
+ * `githubRelease.test.ts`'s mocked `HttpClient` only (no test makes a real network
+ * call).
  *
  * Asset naming matches `.github/workflows/release.yml`'s `package-release` job exactly:
  * `WitcherScriptMerger.Headless-<version>-win-x64.zip` (the CLI/MCP-only, no-GUI host -

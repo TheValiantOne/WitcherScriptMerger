@@ -11,12 +11,11 @@ namespace System.Windows.Forms
 		private delegate IntPtr HookProc(int nCode, IntPtr wParam, IntPtr lParam);
 		private delegate bool EnumChildProc(IntPtr hWnd, IntPtr lParam);
 
+		// Only the Win32 constants this class actually reads - the vendored original
+		// carried the fuller WM_* set (WM_DESTROY/WM_TIMER/WM_USER/DM_GETDEFID), unused
+		// here since this class only ever reacts to WM_INITDIALOG.
 		private const int WH_CALLWNDPROCRET = 12;
-		private const int WM_DESTROY = 0x0002;
 		private const int WM_INITDIALOG = 0x0110;
-		private const int WM_TIMER = 0x0113;
-		private const int WM_USER = 0x400;
-		private const int DM_GETDEFID = WM_USER + 0;
 
 		private const int MBOK = 1;
 		private const int MBCancel = 2;
