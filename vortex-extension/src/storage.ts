@@ -43,6 +43,11 @@ const BUNDLE_TOOLS_SUBDIR = 'bundle-tools';
  *  surrounding JSON/XML - deliberately trivial to read/write without a parser. */
 export const INSTALLED_VERSION_FILENAME = 'installed-version.txt';
 
+/** The Headless host's executable name inside any WSM install this extension uses -
+ *  lives here (rather than toolAcquisition.ts, its original home) so wsmToolPath.ts
+ *  can import it without a toolAcquisition <-> wsmToolPath import cycle. */
+export const WSM_HEADLESS_EXE_NAME = 'WitcherScriptMerger.Headless.exe';
+
 export function getExtensionStorageDir(api: types.IExtensionApi): string {
   return path.join(api.getPath('userData'), EXTENSION_STORAGE_DIRNAME);
 }

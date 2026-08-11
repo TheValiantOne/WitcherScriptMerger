@@ -65,26 +65,30 @@ does anything for any other game.
   shows up here instead of as a confusing failure mid-deploy. Also offers a "Get wcc_lite
   from Nexus Mods" button - see the next section for exactly what that does.
 
-### Known gaps in what's shipped so far
+### First-run setup (both former "known gaps" are closed)
 
-- **No in-Vortex button triggers the *initial* WSM download yet.** `acquireWsmTool` (the
-  full download/verify/extract/register pipeline) is implemented and exported, but no
-  unit built so far has wired it to a UI action - it's only ever exercised by this
-  project's own tests. Until a later unit adds that trigger, a fresh install has two
-  options: wait for that action to land, or place an already-built
-  `WitcherScriptMerger.Headless.exe` yourself under
-  `<Vortex userData>\witcherscriptmerger-vortex\tool\` (Vortex's own `userData` folder is
-  typically `%APPDATA%\Vortex`) - the extension re-registers whatever it finds there as
-  a discovered tool on every load and every game-mode switch, with no network access
-  needed for that re-registration step. **Its `.dll.config` file needs to sit right next
-  to it too** - WSM reads settings via `ConfigurationManager` against that file, and its
-  `AppSettings` constructor calls `Environment.Exit(1)` with no further diagnostic if it
-  can't find one, so an exe copied there alone fails silently on launch.
-- **No settings UI lets you point the extension at an existing WSM install** you already
-  have elsewhere - the design doc originally proposed a per-game settings-panel override
-  for this; it hasn't been built. Today, the only way this extension resolves a WSM path
-  is the acquisition/re-registration flow above (its own private storage directory) -
-  there is no override surface yet.
+- **The initial WSM download has an in-Vortex trigger now**: the status dashboard tile's
+  "Download WitcherScriptMerger v\<version\>" button (shown whenever no WSM build is
+  resolved yet) runs the full download/verify/extract/register pipeline
+  (`src/toolAcquisition.ts`) against this repository's own GitHub release, pinned to
+  the version in `src/githubRelease.ts`'s `DEFAULT_WSM_VERSION`. Downloads stay an
+  explicit user action - nothing downloads automatically at startup.
+- **You can point the extension at an existing WSM install instead**: the same tile's
+  "Use an existing install..." button stores an override path
+  (`src/wsmToolPath.ts`; persisted as `tool-path-override.txt` in the extension's
+  private storage). The override must name a `WitcherScriptMerger*.exe` with `mcp`
+  support - either host from this fork works; the original 2016 Script Merger does not.
+  An override always wins over the extension-managed install; if its file later
+  disappears, the tile says so and offers to clear it (never a silent fallback to a
+  different binary than the one you chose). **The install's `.dll.config` file needs to
+  sit right next to whichever exe is used** - WSM reads settings via
+  `ConfigurationManager` against that file, and its `AppSettings` constructor calls
+  `Environment.Exit(1)` with no further diagnostic if it can't find one, so a bare exe
+  fails silently on launch.
+- Manual placement still works too: an already-built `WitcherScriptMerger.Headless.exe`
+  (plus its `.dll.config`) under `<Vortex userData>\witcherscriptmerger-vortex\tool\`
+  (Vortex's `userData` is typically `%APPDATA%\Vortex`) is re-registered as a
+  discovered tool on every load and game-mode switch, network-free.
 
 ## Being transparent about what gets downloaded, from where, and by whom
 
@@ -156,11 +160,11 @@ plus the root `info.json` into the same plugins subfolder yourself.
 ## Requirements
 
 - **A WSM build capable of `mcp` mode** - either the CLI/MCP-only
-  `WitcherScriptMerger.Headless.exe` this extension's own tool-acquisition pipeline
-  downloads (once wired to a UI trigger - see "Known gaps" above; in the meantime, see
-  that section's manual-placement workaround), or the full WinForms
-  `WitcherScriptMerger.exe`, which also supports `mcp` mode. Either way, this is a
-  Windows-only requirement today, matching Vortex itself being Windows-only.
+  `WitcherScriptMerger.Headless.exe` the status tile's download button acquires for you
+  (see "First-run setup" above, which also covers pointing at an existing install or
+  placing one manually), or the full WinForms `WitcherScriptMerger.exe`, which also
+  supports `mcp` mode. Either way, this is a Windows-only requirement today, matching
+  Vortex itself being Windows-only.
 - **QuickBMS and wcc_lite are only needed for `.bundle`-content (DLC/expansion)
   conflicts** - ordinary flat-file `.ws`/`.xml` conflicts merge with neither installed,
   via WSM's in-process DiffPlex-based merge engine. See "Being transparent..." above for

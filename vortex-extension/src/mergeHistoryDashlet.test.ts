@@ -33,17 +33,17 @@ describe('resolveWsmExePath', () => {
     fs.rmSync(userDataDir, { recursive: true, force: true });
   });
 
-  it('returns null when no WSM build has been acquired yet', () => {
-    expect(resolveWsmExePath(fakeApi(userDataDir))).toBeNull();
+  it('returns null when no WSM build has been acquired yet', async () => {
+    await expect(resolveWsmExePath(fakeApi(userDataDir))).resolves.toBeNull();
   });
 
-  it('returns the exe path when a WSM build has been acquired', () => {
+  it('returns the exe path when a WSM build has been acquired', async () => {
     const toolDir = path.join(userDataDir, 'witcherscriptmerger-vortex', 'tool');
     fs.mkdirSync(toolDir, { recursive: true });
     const exePath = path.join(toolDir, WSM_HEADLESS_EXE_NAME);
     fs.writeFileSync(exePath, 'fake exe bytes', 'utf8');
 
-    expect(resolveWsmExePath(fakeApi(userDataDir))).toBe(exePath);
+    await expect(resolveWsmExePath(fakeApi(userDataDir))).resolves.toBe(exePath);
   });
 });
 

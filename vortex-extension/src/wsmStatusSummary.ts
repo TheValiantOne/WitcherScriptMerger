@@ -1,10 +1,8 @@
-import * as path from 'path';
 import { selectors, types } from 'vortex-api';
-import { DetectedBundleTools, detectBundleTools, fileExists } from './bundleTools';
+import { DetectedBundleTools, detectBundleTools } from './bundleTools';
 import { WITCHER3_GAME_ID } from './gating';
 import { GetStatusResult, WsmMcpClient } from './mcpClient';
-import { getWsmToolDir } from './storage';
-import { WSM_HEADLESS_EXE_NAME } from './toolAcquisition';
+import { resolveWsmExe } from './wsmToolPath';
 import { WsmEnvConfig, buildWsmEnv, mergeWithProcessEnv } from './wsmEnv';
 
 /**
@@ -20,6 +18,11 @@ import { WsmEnvConfig, buildWsmEnv, mergeWithProcessEnv } from './wsmEnv';
 
 export type WsmStatusSummary =
   | { kind: 'not-acquired' }
+  // The user pointed this extension at an existing WSM install (wsmToolPath.ts's
+  // override) but that path no longer exists - deliberately its own state, never
+  // silently folded into 'not-acquired' or a fallback to the managed install, so the
+  // dashlet can show the broken path and offer to clear it.
+  | { kind: 'override-missing'; overridePath: string }
   | { kind: 'error'; message: string }
   | { kind: 'ok'; status: GetStatusResult; bundleTools: DetectedBundleTools };
 
@@ -50,14 +53,18 @@ export async function getWsmStatusSummary(
   api: types.IExtensionApi,
   options: GetWsmStatusSummaryOptions = {},
 ): Promise<WsmStatusSummary> {
-  const exePath = path.join(getWsmToolDir(api), WSM_HEADLESS_EXE_NAME);
-
+  let exePath: string;
   let bundleTools: DetectedBundleTools;
   let env: NodeJS.ProcessEnv;
   try {
-    if (!(await fileExists(exePath))) {
+    const resolution = await resolveWsmExe(api);
+    if (resolution.kind === 'none') {
       return { kind: 'not-acquired' };
     }
+    if (resolution.kind === 'override-missing') {
+      return { kind: 'override-missing', overridePath: resolution.overridePath };
+    }
+    exePath = resolution.exePath;
 
     bundleTools = await detectBundleTools(api);
     const gameDirectory = selectors.discoveryByGame(api.getState(), WITCHER3_GAME_ID)?.path;
