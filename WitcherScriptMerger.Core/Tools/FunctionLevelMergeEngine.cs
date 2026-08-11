@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -92,18 +93,41 @@ namespace WitcherScriptMerger.Tools
 			var decisions = new List<string>();
 
 			// Reconcile insertions (units on either side with no vanilla counterpart at
-			// all) before resolving vanilla units - a same-named, differently-bodied
-			// insertion on both sides is a genuine new-functionality collision, a
-			// different problem shape from "vanilla function edited two ways", and out
-			// of scope for this engine (declines the whole file, same as if this
-			// engine didn't exist for this particular pair).
+			// all) GLOBALLY, across all slots, before resolving vanilla units. Global,
+			// not per-slot, because the two sides' alignments can attribute the same
+			// named insertion to DIFFERENT slots - the normal state of affairs when
+			// re-merging: the accumulated side (a previous full merge) already contains
+			// what a later mod in the chain inserts, at whatever position the earlier
+			// merge put it. A per-slot-only reconciliation never sees such a pair and
+			// emits BOTH copies (observed live: a real r4Player.ws re-merge chain
+			// duplicated SetSlowActive this way). Resolution rules:
+			//  - both sides, byte-identical or whitespace-only-different: keep the OLD
+			//    (accumulated) side's copy, skip the new side's - same "take one side"
+			//    convention as the whole-file engine's whitespace-only auto-resolve.
+			//  - both sides, genuinely different content: a new-functionality collision
+			//    - decline the file, as before.
+			//  - one side, duplicated (an upstream silently-corrupted input): collapse
+			//    identical/whitespace-equal copies to the first; differing copies
+			//    decline.
+			var skipOldUnits = new HashSet<int>();
+			var skipNewUnits = new HashSet<int>();
+			if (!ReconcileInsertionsGlobally(oldDoc, oldAlignment, newDoc, newAlignment, vanillaCount, skipOldUnits, skipNewUnits, out var collisionName))
+				return DeclineWithWarning(
+					$"function-level merge declined: '{collisionName}' is inserted with different content by both " +
+					"sides (or duplicated with differing content on one side) - a genuine new-functionality " +
+					"collision this engine can't resolve.");
+
 			var insertionsPerSlot = new List<string>[vanillaCount + 1];
+			var oldSurvivorsPerSlot = new int[vanillaCount + 1];
+			var newSurvivorsPerSlot = new int[vanillaCount + 1];
 			for (var slot = 0; slot <= vanillaCount; ++slot)
 			{
-				var resolved = ReconcileInsertions(oldDoc, oldAlignment, newDoc, newAlignment, slot);
-				if (resolved == null)
-					return FunctionLevelMergeResult.Declined;
-				insertionsPerSlot[slot] = resolved;
+				var list = new List<string>();
+				foreach (var idx in oldAlignment.InsertionsAtSlot[slot])
+					if (!skipOldUnits.Contains(idx)) { list.Add(oldDoc.Units[idx].FullText); ++oldSurvivorsPerSlot[slot]; }
+				foreach (var idx in newAlignment.InsertionsAtSlot[slot])
+					if (!skipNewUnits.Contains(idx)) { list.Add(newDoc.Units[idx].FullText); ++newSurvivorsPerSlot[slot]; }
+				insertionsPerSlot[slot] = list;
 			}
 
 			var resolvedUnits = new string[vanillaCount];
@@ -119,8 +143,11 @@ namespace WitcherScriptMerger.Tools
 			var merged = new StringBuilder();
 			for (var slot = 0; slot <= vanillaCount; ++slot)
 			{
-				var oldHasInsertions = oldAlignment.InsertionsAtSlot[slot].Count > 0;
-				var newHasInsertions = newAlignment.InsertionsAtSlot[slot].Count > 0;
+				// SURVIVING insertions only - a slot whose insertions were all consumed
+				// by the global reconciliation (the other side's copy won) behaves like
+				// a no-insertion slot.
+				var oldHasInsertions = oldSurvivorsPerSlot[slot] > 0;
+				var newHasInsertions = newSurvivorsPerSlot[slot] > 0;
 				// Set when this slot's emission ended on a synthesized (line-break-
 				// prefixed) unit text rather than gap text - the vanilla unit that
 				// follows needs its own synthesized break too, since its usual leading
@@ -178,7 +205,8 @@ namespace WitcherScriptMerger.Tools
 						insertingOld ? newDoc : oldDoc,
 						insertingOld ? newAlignment : oldAlignment,
 						insertingOld ? newDescription : oldDescription,
-						baseDoc, decisions))
+						baseDoc, decisions,
+						insertingOld ? skipOldUnits : skipNewUnits))
 					{
 						// The span's anchors aren't well-defined (a neighboring vanilla
 						// unit was deleted on the inserting side). Fall back to
@@ -355,53 +383,87 @@ namespace WitcherScriptMerger.Tools
 
 		#region Insertion reconciliation
 
-		// Returns the resolved, ordered list of FullText to emit at this slot, or null
-		// if a same-named insertion on both sides has different content (a genuine
-		// new-functionality collision - declines the whole file, the one case this
-		// method can't resolve on its own).
-		static List<string> ReconcileInsertions(
-			ScriptDocument oldDoc, UnitAlignment oldAlignment, ScriptDocument newDoc, UnitAlignment newAlignment, int slot)
+		// Global, cross-slot reconciliation of both sides' insertions - see TryMerge's
+		// own comment for the rules and the observed re-merge scenario this exists for.
+		// Fills skipOldUnits/skipNewUnits with side unit indices whose emission is
+		// suppressed (a surviving copy elsewhere covers them). Returns false - with the
+		// offending scoped name - on a genuine differing-content collision.
+		static bool ReconcileInsertionsGlobally(
+			ScriptDocument oldDoc, UnitAlignment oldAlignment, ScriptDocument newDoc, UnitAlignment newAlignment,
+			int vanillaCount, HashSet<int> skipOldUnits, HashSet<int> skipNewUnits, out string collisionName)
 		{
-			var oldInsertions = oldAlignment.InsertionsAtSlot[slot].Select(i => oldDoc.Units[i]).ToList();
-			var newInsertions = newAlignment.InsertionsAtSlot[slot].Select(i => newDoc.Units[i]).ToList();
+			collisionName = null;
 
-			if (oldInsertions.Count == 0 && newInsertions.Count == 0)
-				return new List<string>();
-
-			// Two insertions with the same scoped name on ONE side (e.g. a mod's own
-			// copy-paste mistake) is an ambiguity this method can't safely resolve -
-			// which occurrence did the mod author actually intend? Decline rather than
-			// guess, same policy as the same-name-different-body-across-sides case
-			// below. Also avoids ToDictionary throwing on the duplicate key.
-			if (HasDuplicateNames(oldInsertions) || HasDuplicateNames(newInsertions))
-				return null;
-
-			var newByName = newInsertions.ToDictionary(u => u.ScopedName);
-			var consumedNewNames = new HashSet<string>();
-			var result = new List<string>();
-
-			foreach (var oldUnit in oldInsertions)
+			// First-occurrence-by-name survivor map per side, collapsing same-side
+			// duplicates (identical or whitespace-equal collapse; differing decline).
+			Dictionary<string, ScriptUnit> Survivors(
+				ScriptDocument doc, UnitAlignment alignment, HashSet<int> skips, ref string collision)
 			{
-				if (newByName.TryGetValue(oldUnit.ScopedName, out var newUnit))
+				var byName = new Dictionary<string, ScriptUnit>();
+				for (var slot = 0; slot <= vanillaCount && collision == null; ++slot)
 				{
-					consumedNewNames.Add(oldUnit.ScopedName);
-					if (oldUnit.FullText != newUnit.FullText)
-						return null;
-					result.Add(oldUnit.FullText);
+					foreach (var idx in alignment.InsertionsAtSlot[slot])
+					{
+						var unit = doc.Units[idx];
+						if (byName.TryGetValue(unit.ScopedName, out var first))
+						{
+							if (first.FullText == unit.FullText || IsWhitespaceEquivalent(first.FullText, unit.FullText))
+								skips.Add(idx);
+							else
+							{
+								collision = unit.ScopedName;
+								break;
+							}
+						}
+						else
+						{
+							byName[unit.ScopedName] = unit;
+						}
+					}
 				}
-				else
+				return byName;
+			}
+
+			var oldByName = Survivors(oldDoc, oldAlignment, skipOldUnits, ref collisionName);
+			if (collisionName != null)
+				return false;
+			var newByName = Survivors(newDoc, newAlignment, skipNewUnits, ref collisionName);
+			if (collisionName != null)
+				return false;
+
+			// Cross-side: a name both sides insert keeps the OLD (accumulated) side's
+			// copy - identical/whitespace-equal content makes that purely mechanical;
+			// genuinely different content is the undecidable collision.
+			for (var slot = 0; slot <= vanillaCount; ++slot)
+			{
+				foreach (var idx in newAlignment.InsertionsAtSlot[slot])
 				{
-					result.Add(oldUnit.FullText);
+					if (skipNewUnits.Contains(idx))
+						continue;
+					var unit = newDoc.Units[idx];
+					if (!oldByName.TryGetValue(unit.ScopedName, out var oldUnit))
+						continue;
+					if (oldUnit.FullText == unit.FullText || IsWhitespaceEquivalent(oldUnit.FullText, unit.FullText))
+					{
+						skipNewUnits.Add(idx);
+					}
+					else
+					{
+						collisionName = unit.ScopedName;
+						return false;
+					}
 				}
 			}
-			foreach (var newUnit in newInsertions)
-				if (!consumedNewNames.Contains(newUnit.ScopedName))
-					result.Add(newUnit.FullText);
 
-			return result;
+			return true;
 		}
 
-		static bool HasDuplicateNames(List<ScriptUnit> units) => units.Select(u => u.ScopedName).Distinct().Count() != units.Count;
+		// The whole-file engine's own whitespace-collapse equality (ASCII-only set,
+		// NBSP-safe - see DiffPlexMergeEngine.NormalizeWhitespace), applied to two unit
+		// texts: the same standard the engine already uses when deciding a conflict is
+		// "purely whitespace" and safe to auto-resolve one side of.
+		static bool IsWhitespaceEquivalent(string a, string b) =>
+			DiffPlexMergeEngine.NormalizeWhitespace(new[] { a }) == DiffPlexMergeEngine.NormalizeWhitespace(new[] { b });
 
 		#endregion
 
@@ -419,7 +481,7 @@ namespace WitcherScriptMerger.Tools
 			StringBuilder merged, int slot, int vanillaCount,
 			ScriptDocument insertingDoc, UnitAlignment insertingAlignment, string insertingText, string insertingDescription,
 			ScriptDocument otherDoc, UnitAlignment otherAlignment, string otherDescription,
-			ScriptDocument baseDoc, List<string> decisions)
+			ScriptDocument baseDoc, List<string> decisions, HashSet<int> skipUnits)
 		{
 			int prevSideIndex; // index into insertingDoc.Units of the unit before the span, or -1
 			if (slot == 0)
@@ -449,7 +511,21 @@ namespace WitcherScriptMerger.Tools
 
 			var spanStart = prevSideIndex < 0 ? 0 : insertingDoc.Units[prevSideIndex].EndOffset;
 			var spanEnd = nextSideIndex >= insertingDoc.Units.Count ? insertingText.Length : insertingDoc.Units[nextSideIndex].StartOffset;
-			merged.Append(insertingText, spanStart, spanEnd - spanStart);
+
+			// Emit the span verbatim, EXCEPT units the global insertion reconciliation
+			// consumed (a surviving copy elsewhere covers them - see
+			// ReconcileInsertionsGlobally): their text is cut out of the span, their
+			// surrounding gaps kept, so position and separators of everything else are
+			// untouched.
+			var cursor = spanStart;
+			for (var u = prevSideIndex + 1; u < nextSideIndex; ++u)
+			{
+				if (!skipUnits.Contains(u))
+					continue;
+				merged.Append(insertingText, cursor, insertingDoc.Units[u].StartOffset - cursor);
+				cursor = insertingDoc.Units[u].EndOffset;
+			}
+			merged.Append(insertingText, cursor, spanEnd - cursor);
 
 			// Audit notes. Taking the inserting side's span means ITS surrounding gap
 			// text wins over vanilla's at this slot (necessarily - the inserted
@@ -522,6 +598,101 @@ namespace WitcherScriptMerger.Tools
 		#endregion
 
 		#region Output sanity gate
+
+		// Validates a whole-file "clean" merge's output against the three inputs it was
+		// built from - the guard for DiffPlex's SILENT ThreeWayDiffer failure mode
+		// (no exception, no conflict block, but content lost or duplicated; see
+		// DiffPlexMergeEngine's CLAUDE.md section for measured rates). Only meaningful
+		// for .ws files (the extractor is WitcherScript-specific) - anything else
+		// returns true, trusting the merge as before. Invariants, cheapest first:
+		//
+		//  1. The structural sanity gate (member-shaped declarations at brace depth 0,
+		//     unbalanced braces).
+		//  2. No duplication: no scoped unit name may occur MORE times in the output
+		//     than it does in any single input (observed live: mid-chain "clean" steps
+		//     silently duplicated three functions in a real r4Player.ws chain, which
+		//     then poisoned every later step).
+		//  3. No loss: a scoped name present in BOTH old and new must appear in the
+		//     output, and a name one side INSERTED (present there but not in base) must
+		//     appear too - the other side can't have deleted what it never had. A name
+		//     absent from one side but present in base + the other side MAY legally
+		//     vanish (a real deletion propagating), so it isn't required.
+		//
+		// Inputs that don't extract cleanly make the judgement impossible - returns
+		// true (trust the merge, as before this guard existed) - EXCEPT when the inputs
+		// extract and the OUTPUT doesn't, which is itself corruption.
+		public static bool ValidateWholeFileMergeOutput(
+			string baseText, string oldText, string newText, string mergedText, string outputPath, out string violation)
+		{
+			violation = null;
+			if (!FileIndex.ModFile.IsScript(outputPath))
+				return true;
+
+			if (!PassesReassemblySanityGate(mergedText, out var gateFailure))
+			{
+				violation = gateFailure;
+				return false;
+			}
+
+			Dictionary<string, int> Counts(string text)
+			{
+				var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+				foreach (var unit in ScriptUnitExtractor.Extract(text).Units)
+				{
+					counts.TryGetValue(unit.ScopedName, out var n);
+					counts[unit.ScopedName] = n + 1;
+				}
+				return counts;
+			}
+
+			Dictionary<string, int> baseCounts, oldCounts, newCounts, mergedCounts;
+			try
+			{
+				baseCounts = Counts(baseText);
+				oldCounts = Counts(oldText);
+				newCounts = Counts(newText);
+			}
+			catch (ScriptUnitExtractor.ExtractionException)
+			{
+				return true;
+			}
+			try
+			{
+				mergedCounts = Counts(mergedText);
+			}
+			catch (ScriptUnitExtractor.ExtractionException ex)
+			{
+				violation = "merged output no longer scans cleanly (" + ex.Message + ")";
+				return false;
+			}
+
+			int At(Dictionary<string, int> counts, string name) => counts.TryGetValue(name, out var n) ? n : 0;
+
+			foreach (var (name, mergedCount) in mergedCounts)
+			{
+				var maxInput = Math.Max(At(baseCounts, name), Math.Max(At(oldCounts, name), At(newCounts, name)));
+				if (mergedCount > maxInput)
+				{
+					violation = $"'{name}' occurs {mergedCount}x in the merged output but at most {maxInput}x in any input (duplicated)";
+					return false;
+				}
+			}
+
+			foreach (var name in oldCounts.Keys.Concat(newCounts.Keys).Distinct())
+			{
+				var inOld = At(oldCounts, name) > 0;
+				var inNew = At(newCounts, name) > 0;
+				var inBase = At(baseCounts, name) > 0;
+				var required = (inOld && inNew) || (inOld && !inBase) || (inNew && !inBase);
+				if (required && At(mergedCounts, name) == 0)
+				{
+					violation = $"'{name}' is present in {(inOld && inNew ? "both inputs" : "an input that inserted it")} but missing from the merged output (lost)";
+					return false;
+				}
+			}
+
+			return true;
+		}
 
 		// Member-shaped line starts that are invalid at brace depth 0 in WitcherScript:
 		// access modifiers ("'public' has no sense for global function ...", the exact

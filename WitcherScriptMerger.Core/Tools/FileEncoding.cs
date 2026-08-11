@@ -69,6 +69,26 @@ namespace WitcherScriptMerger.Tools
 			File.WriteAllText(path, text, Utf16LEWithBom);
 		}
 
+		// Atomic variant for files an external reader may open concurrently: writes to
+		// a same-directory temp file, then swaps it into place with File.Move
+		// (same-volume rename - atomic on NTFS). Exists because merged script output
+		// lands inside the live game's Mods tree, and the game's script compiler (or a
+		// mod manager) reading a merged file mid-WriteAllText sees a truncated script:
+		// class members near the file's tail simply absent, compiling into
+		// "'X' is not a member of Y" errors that look exactly like a bad merge -
+		// observed on a real install when the game was launched while a 40-file
+		// headless re-merge was still writing.
+		public static void WriteUtf16Atomic(string path, string text)
+		{
+			var dir = Path.GetDirectoryName(path);
+			if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+				Directory.CreateDirectory(dir);
+
+			var tempPath = path + ".wsm-tmp";
+			File.WriteAllText(tempPath, text, Utf16LEWithBom);
+			File.Move(tempPath, path, overwrite: true);
+		}
+
 		// Ensures an on-disk copy of `file` is UTF-16LE+BOM, writing a temp copy under
 		// Paths.TempBundleContent\Encoding\<role>\ only when a copy is actually needed.
 		// For a tool that must be handed a file path rather than raw text (the now-retired

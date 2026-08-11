@@ -466,5 +466,111 @@ namespace WitcherScriptMerger.Tests.Tools
 		}
 
 		#endregion
+
+		#region Chain-step validation & global insertion reconciliation (round 2)
+
+		// The re-merge shape that produced a real, live duplication: the accumulated
+		// side (a previous full merge) already contains the function a later chain
+		// step's mod inserts - at a DIFFERENT position than the mod's own copy, so
+		// per-slot reconciliation alone never sees the pair.
+		[Fact]
+		public void TryMerge_SameInsertionAtDifferentSlotsOnBothSides_EmitsExactlyOneCopy()
+		{
+			var baseText = Fn("A", "\ta();\r\n") + "\r\n" + Fn("B", "\tb();\r\n") + "\r\n" + Fn("C", "\tc();\r\n");
+			var newFn = Fn("NEW", "\tn();\r\n");
+			var oldText = Fn("A", "\ta();\r\n") + "\r\n" + newFn + "\r\n" + Fn("B", "\tb();\r\n") + "\r\n" + Fn("C", "\tc();\r\n");
+			var newText = Fn("A", "\ta();\r\n") + "\r\n" + Fn("B", "\tb();\r\n") + "\r\n" + newFn + "\r\n" + Fn("C", "\tc();\r\n");
+
+			var result = Merge(baseText, oldText, newText);
+
+			Assert.True(result.Applied);
+			Assert.Equal(1, System.Text.RegularExpressions.Regex.Matches(result.MergedText, @"function NEW\(").Count);
+			Assert.True(FunctionLevelMergeEngine.PassesReassemblySanityGate(result.MergedText, out _));
+		}
+
+		// Whitespace-only differences between the two sides' copies of the same
+		// insertion resolve like the whole-file engine's whitespace-only conflicts:
+		// take one side (the accumulated side's copy), never both, never a decline.
+		[Fact]
+		public void TryMerge_SameInsertionDifferingOnlyInWhitespace_KeepsOldSideCopy()
+		{
+			var baseText = Fn("A", "\ta();\r\n");
+			var oldText = Fn("A", "\ta();\r\n") + "\r\n" + "function NEW()\r\n{\r\n\tn();\r\n}\r\n";
+			var newText = Fn("A", "\ta();\r\n") + "\r\n" + "function NEW()\r\n{\r\n\tn();  \r\n}\r\n";
+
+			var result = Merge(baseText, oldText, newText);
+
+			Assert.True(result.Applied);
+			Assert.Equal(1, System.Text.RegularExpressions.Regex.Matches(result.MergedText, @"function NEW\(").Count);
+			Assert.Contains("\tn();\r\n}", result.MergedText);
+		}
+
+		[Fact]
+		public void TryMerge_SameInsertionWithDifferentContent_StillDeclines()
+		{
+			var baseText = Fn("A", "\ta();\r\n");
+			var oldText = baseText + "\r\n" + Fn("NEW", "\tfromOld();\r\n");
+			var newText = baseText + "\r\n" + Fn("NEW", "\tfromNew();\r\n");
+
+			var result = Merge(baseText, oldText, newText);
+
+			Assert.False(result.Applied);
+		}
+
+		// An upstream silently-corrupted accumulated file can carry byte-identical
+		// duplicate insertions; refusing the whole file over copies that agree helps
+		// no one - they collapse to one.
+		[Fact]
+		public void TryMerge_IdenticalDuplicateInsertionsOnOneSide_CollapseToOne()
+		{
+			var baseText = Fn("A", "\ta();\r\n") + "\r\n" + Fn("B", "\tb();\r\n");
+			var dup = Fn("NEW", "\tn();\r\n");
+			var oldText = Fn("A", "\ta();\r\n") + "\r\n" + dup + "\r\n" + Fn("B", "\tb();\r\n") + "\r\n" + dup;
+
+			var result = Merge(baseText, oldText, baseText);
+
+			Assert.True(result.Applied);
+			Assert.Equal(1, System.Text.RegularExpressions.Regex.Matches(result.MergedText, @"function NEW\(").Count);
+		}
+
+		[Fact]
+		public void ValidateWholeFileMergeOutput_DetectsSilentDuplication()
+		{
+			var baseText = Fn("A", "\ta();\r\n");
+			var oldText = baseText + "\r\n" + Fn("NEW", "\tn();\r\n");
+			var corrupted = baseText + "\r\n" + Fn("NEW", "\tn();\r\n") + "\r\n" + Fn("NEW", "\tn();\r\n");
+
+			Assert.False(FunctionLevelMergeEngine.ValidateWholeFileMergeOutput(baseText, oldText, baseText, corrupted, "x.ws", out var violation));
+			Assert.Contains("duplicated", violation);
+		}
+
+		[Fact]
+		public void ValidateWholeFileMergeOutput_DetectsSilentLossOfAnInsertion()
+		{
+			var baseText = Fn("A", "\ta();\r\n");
+			var oldText = baseText + "\r\n" + Fn("NEW", "\tn();\r\n");
+
+			Assert.False(FunctionLevelMergeEngine.ValidateWholeFileMergeOutput(baseText, oldText, baseText, baseText, "x.ws", out var violation));
+			Assert.Contains("lost", violation);
+		}
+
+		[Fact]
+		public void ValidateWholeFileMergeOutput_AllowsALegitimateDeletionPropagating()
+		{
+			var baseText = Fn("A", "\ta();\r\n") + "\r\n" + Fn("B", "\tb();\r\n");
+			var oldText = baseText;
+			var newText = Fn("A", "\ta();\r\n");
+			var mergedText = Fn("A", "\ta();\r\n");
+
+			Assert.True(FunctionLevelMergeEngine.ValidateWholeFileMergeOutput(baseText, oldText, newText, mergedText, "x.ws", out _));
+		}
+
+		[Fact]
+		public void ValidateWholeFileMergeOutput_NonScriptFiles_AlwaysTrusted()
+		{
+			Assert.True(FunctionLevelMergeEngine.ValidateWholeFileMergeOutput("<a/>", "<b/>", "<c/>", "<d/>", "x.xml", out _));
+		}
+
+		#endregion
 	}
 }
