@@ -15,12 +15,17 @@
 // fails fast with a clear message rather than silently packaging a stale/missing dist.
 //
 // Zipping is platform-conditional rather than an added npm dependency: PowerShell's
-// `Compress-Archive` on Windows (matching this repo's own `release.yml`, which is also
-// pwsh-driven for its Windows-built assets), or the `zip` CLI on macOS/Linux (present
-// on both by default) for anyone building this extension outside Windows even though
-// Vortex itself only runs on Windows today (docs/vortex-extension-design.md, Open
-// Question 8) - the built extension is only useful there, but nothing about producing
-// the zip itself requires it.
+// `Compress-Archive` on Windows, or the `zip` CLI on macOS/Linux (present on both by
+// default) for anyone building this extension outside Windows even though Vortex
+// itself only runs on Windows today (docs/vortex-extension-design.md, Open Question 8)
+// - the built extension is only useful there, but nothing about producing the zip
+// itself requires it. Both branches `cd` into the staged folder and zip its *contents*
+// (not the folder itself), matching this repo's own `.github/workflows/release.yml`
+// (its `package-release` job's own `zip -r` step, `( cd publish/... && zip -r
+// ../../dist/out.zip . )`) - so the resulting archive extracts flat, with `index.js`/
+// `info.json` at the zip root, not nested one level down under a `<name>/` folder.
+// (That release.yml step runs on plain Ubuntu via bash's `zip`, not PowerShell - it's
+// the *archive layout*, not the tool, this mirrors.)
 
 import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
@@ -45,45 +50,71 @@ if (!fs.existsSync(path.join(DIST_DIR, 'index.js'))) {
   console.error("dist/index.js not found - run 'npm run build' first (or use 'npm run package', which does this for you).");
   process.exit(1);
 }
+if (!fs.existsSync(INFO_JSON)) {
+  console.error(`info.json not found at '${INFO_JSON}' - this is this extension's own Vortex manifest and should always be present.`);
+  process.exit(1);
+}
 
 fs.rmSync(RELEASE_DIR, { recursive: true, force: true });
 fs.mkdirSync(stageDir, { recursive: true });
 
-for (const file of fs.readdirSync(DIST_DIR)) {
-  fs.copyFileSync(path.join(DIST_DIR, file), path.join(stageDir, file));
-}
+// cpSync (not a manual readdir+copyFileSync loop) so this doesn't break if
+// webpack.config.cjs's output ever grows a subdirectory (e.g. code-splitting) -
+// today's output is flat (just index.js/index.js.map), but recursive copy costs
+// nothing and removes that assumption.
+fs.cpSync(DIST_DIR, stageDir, { recursive: true });
 fs.copyFileSync(INFO_JSON, path.join(stageDir, 'info.json'));
 
 const zipPath = path.join(RELEASE_DIR, `${stageName}-${pkg.version}.zip`);
 
-if (process.platform === 'win32') {
-  execFileSync(
-    'powershell',
-    [
-      '-NoProfile',
-      '-NonInteractive',
-      '-Command',
-      `Compress-Archive -Path '${stageDir}\\*' -DestinationPath '${zipPath}' -Force`,
-    ],
-    { stdio: 'inherit' },
-  );
-} else {
-  try {
-    execFileSync('zip', ['-r', path.basename(zipPath), stageName], { cwd: RELEASE_DIR, stdio: 'inherit' });
-  } catch (err) {
-    console.error(
-      `\nCould not run 'zip' (${err instanceof Error ? err.message : String(err)}). This script's posix zip path ` +
-        "hasn't been exercised beyond a missing-binary check - install a 'zip' CLI, or skip the zip step and copy " +
-        `the staged folder directly instead:\n  ${stageDir}`,
+// Escapes a path for embedding inside a PowerShell single-quoted string: doubling an
+// embedded `'` is PowerShell's own escape for that context (not a backslash escape,
+// which single-quoted PowerShell strings don't interpret at all) - without this, a
+// repo checked out under a path containing an apostrophe (e.g. a Windows user profile
+// like `C:\Users\O'Brien\...`) would prematurely terminate the quoted string and fail
+// with a PowerShell parse error rather than produce a zip.
+function escapePowerShellSingleQuoted(value) {
+  return value.replace(/'/g, "''");
+}
+
+try {
+  if (process.platform === 'win32') {
+    // -DestinationPath refers to a location one level up from stageDir (RELEASE_DIR),
+    // so this doesn't need stageDir to exist as a Compress-Archive *source* root
+    // itself - '\*' selects stageDir's contents, producing a flat archive (index.js/
+    // info.json at the zip root), matching the posix branch below.
+    execFileSync(
+      'powershell',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `Compress-Archive -Path '${escapePowerShellSingleQuoted(stageDir)}\\*' -DestinationPath '${escapePowerShellSingleQuoted(zipPath)}' -Force`,
+      ],
+      { stdio: 'inherit' },
     );
-    process.exit(1);
+  } else {
+    // cwd: stageDir (not RELEASE_DIR) + zipping '.' is what makes this flat, mirroring
+    // release.yml's own `cd <staged-dir> && zip -r ../../dist/out.zip .` pattern -
+    // zipping `stageName` from RELEASE_DIR instead (an earlier version of this script
+    // did exactly that) nests every entry under a `<stageName>/` prefix, contradicting
+    // this script's own "lands directly in ..., not a nested subfolder" install
+    // instructions below.
+    execFileSync('zip', ['-r', zipPath, '.'], { cwd: stageDir, stdio: 'inherit' });
   }
+} catch (err) {
+  console.error(
+    `\nFailed to create the zip (${err instanceof Error ? err.message : String(err)}). This script's zip step ` +
+      `needs '${process.platform === 'win32' ? 'powershell' : 'zip'}' on PATH. As a fallback, you can skip ` +
+      `zipping entirely and copy the staged folder's contents directly instead:\n  ${stageDir}`,
+  );
+  process.exit(1);
 }
 
 console.log(`\nPackaged: ${zipPath}`);
 console.log(`Staged (unzipped) folder: ${stageDir}`);
 console.log(
-  `\nManual install: extract the zip (or copy the staged folder above) so its contents land directly in\n` +
+  `\nManual install: extract the zip (or copy the staged folder's contents) so they land directly in\n` +
     `  %APPDATA%\\Vortex\\plugins\\${stageName}\\\n` +
     `i.e. that folder should directly contain index.js and info.json, not a nested subfolder.`,
 );
