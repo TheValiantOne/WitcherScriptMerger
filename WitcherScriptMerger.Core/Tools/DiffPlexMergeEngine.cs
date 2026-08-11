@@ -255,14 +255,51 @@ namespace WitcherScriptMerger.Tools
 
 			if (!result.HasConflicts)
 			{
-				// A prior attempt at this same conflict may have left a sidecar marker
-				// file behind (see below) - if this attempt now auto-solves (e.g. the
-				// mod files were updated to no longer conflict), remove it so it doesn't
-				// sit next to the fresh output indefinitely, stale and misleading.
-				DeleteIfExists(GetConflictMarkerPath(outputPath));
+				// DiffPlex's ThreeWayDiffer bug has a SILENT variant: a "clean" merge
+				// whose output actually lost or duplicated content, with no exception
+				// and no conflict block (see BuildMerge's comment - confirmed via
+				// minimal repro, and observed live: a real 12-mod r4Player.ws chain had
+				// mid-chain "clean" steps silently duplicate three functions, which
+				// then made a later step's function-level rescue decline on the
+				// ambiguity). Every clean output is therefore validated before being
+				// trusted: structural sanity plus per-unit no-loss/no-duplication
+				// invariants against the three inputs. A violation is treated exactly
+				// like HasConflicts - try the function-level rescue (which re-merges
+				// from the ORIGINAL inputs, sidestepping the corrupted output
+				// entirely), then fall through to the conflict-marker sidecar.
+				if (FunctionLevelMergeEngine.ValidateWholeFileMergeOutput(
+					baseText, oldText, newText, result.MergedText, outputPath, out var invariantViolation))
+				{
+					// A prior attempt at this same conflict may have left a sidecar
+					// marker file behind (see below) - if this attempt now auto-solves
+					// (e.g. the mod files were updated to no longer conflict), remove
+					// it so it doesn't sit next to the fresh output indefinitely,
+					// stale and misleading.
+					DeleteIfExists(GetConflictMarkerPath(outputPath));
 
-				FileEncoding.WriteUtf16(outputPath, result.MergedText);
-				return MergeEngineResult.AutoSolved;
+					FileEncoding.WriteUtf16Atomic(outputPath, result.MergedText);
+					return MergeEngineResult.AutoSolved;
+				}
+
+				AppState.Notifier.ShowMessage(
+					$"The whole-file merge of {oldDescription ?? source1.Name} + {newDescription ?? source2.Name} produced output that " +
+					$"fails a content invariant ({invariantViolation}) - the known silent variant of the " +
+					"DiffPlex ThreeWayDiffer bug (see CLAUDE.md). Falling back to the function-level merge.",
+					"Merge Output Rejected", NotifyButtons.OK, DialogIcon.Warning);
+
+				if (TryFunctionLevelRescue(baseText, oldText, newText, source1, source2, outputPath, oldDescription, newDescription, openConflictMarkers))
+					return MergeEngineResult.AutoSolved;
+
+				// Same policy as the DiffAlgorithmException branch above, for the same
+				// reason: the "clean" output is corrupt, so writing it anywhere - as
+				// the merged file OR as conflict-marker content - would ship the
+				// corruption. Nothing is written.
+				AppState.Notifier.ShowMessage(
+					$"Skipped {oldDescription ?? source1.Name} + {newDescription ?? source2.Name}: the whole-file merge silently corrupted " +
+					$"content ({invariantViolation}) and the function-level fallback declined. Needs manual " +
+					"resolution - open the source mod files directly to compare and resolve.",
+					"Skipped", NotifyButtons.OK, DialogIcon.Warning);
+				return MergeEngineResult.NeedsManualResolution;
 			}
 
 			// Before falling back to conflict markers: same function-level rescue
@@ -463,8 +500,23 @@ namespace WitcherScriptMerger.Tools
 			if (!result.Applied)
 				return false;
 
+			// The rescue's own output gets the same content-invariant validation as a
+			// whole-file "clean" merge (duplication/loss/structure - see
+			// ValidateWholeFileMergeOutput): an emission bug in the function-level
+			// engine must fail loudly here, not ship. Declining is always safe - the
+			// caller falls through to its existing sidecar/skip behavior.
+			if (!FunctionLevelMergeEngine.ValidateWholeFileMergeOutput(
+				baseText, oldText, newText, result.MergedText, outputPath, out var rescueViolation))
+			{
+				AppState.Notifier.ShowMessage(
+					$"Function-level merge of {oldDescription ?? source1.Name} + {newDescription ?? source2.Name} produced output failing a " +
+					$"content invariant ({rescueViolation}) - declining it rather than writing it.",
+					"Function-Level Merge", NotifyButtons.OK, DialogIcon.Warning);
+				return false;
+			}
+
 			DeleteIfExists(GetConflictMarkerPath(outputPath));
-			FileEncoding.WriteUtf16(outputPath, result.MergedText);
+			FileEncoding.WriteUtf16Atomic(outputPath, result.MergedText);
 			LastFunctionLevelDecisions = result.Decisions;
 
 			if (result.Decisions.Count > 0)
