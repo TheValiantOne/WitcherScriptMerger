@@ -3,6 +3,7 @@ import { isWsmToolAcquired, scanWsmConflicts } from './conflictScan';
 import { isModOrDependencyInstallActive, notifyConflictsIfChanged } from './conflictNotifications';
 import { isWitcher3Active, WITCHER3_GAME_ID } from './gating';
 import { registerMergeHistoryDashlet } from './mergeHistoryDashlet';
+import { registerResolveScriptConflictsAction } from './resolveAction';
 import { registerWsmStatusDashlet } from './statusTile';
 import { ensureWsmToolRegistered } from './toolAcquisition';
 
@@ -52,6 +53,12 @@ import { ensureWsmToolRegistered } from './toolAcquisition';
  * the declarative counterpart to how `tryRegisterWsmTool` below re-checks the same
  * condition imperatively on every `'gamemode-activated'` event.
  *
+ * This unit (the resolve action) adds the fourth real registration:
+ * `registerResolveScriptConflictsAction` (`./resolveAction`), called directly in `main`
+ * alongside `registerMergeHistoryDashlet` above, following the exact same
+ * directly-in-`main`, gate-on-`isWitcher3Active`-via-`condition` pattern - see
+ * `resolveAction.ts`'s own doc comment for how this unit's own action does exactly that.
+ *
  * **Correction (found while building Unit J, applies to every future unit too):** an
  * earlier version of this comment said later units should add their own
  * `context.register*` calls *inside* the `context.once(...)` callback below. That's
@@ -62,11 +69,11 @@ import { ensureWsmToolRegistered } from './toolAcquisition';
  * doc comment) is documented as being for "all your extension setup *except* for the
  * register calls (i.e. installing event handlers, doing startup calculations)" - not a
  * valid place to call a `context.register*` function at all. `registerWsmStatusDashlet`
- * (this unit's own fourth registration) is therefore called directly in `main`'s own
- * body, synchronously, before `context.once(...)` - not deferred into it, matching
- * `registerMergeHistoryDashlet` above. Every future unit adding a `context.register*`
- * call (an action, a main page, a settings page, another dashlet) must do the same: call
- * it directly here, gating *visibility* (not the registration call itself) on
+ * (this unit's own fifth registration) is therefore called directly in `main`'s own
+ * body, synchronously, before `context.once(...)` - not deferred into it, matching every
+ * other registration above. Every future unit adding a `context.register*` call (an
+ * action, a main page, a settings page, another dashlet) must do the same: call it
+ * directly here, gating *visibility* (not the registration call itself) on
  * `isWitcher3Active` via that API's own live `condition`/`isVisible` callback instead,
  * exactly like `registerWsmStatusDashlet` does (see `statusTile.ts`). Only non-register
  * work - event handlers, one-time startup calculations, anything that reads
@@ -199,6 +206,12 @@ function main(context: types.IExtensionContext): boolean {
     context.api.events.on('gamemode-activated', tryRegisterWsmTool);
     context.api.onAsync('did-deploy', checkForConflictsAfterDeploy);
   });
+
+  // This unit's own registration - see resolveAction.ts's own doc comment for why it
+  // gates on Witcher 3 being active via a live `condition` callback rather than an
+  // upfront check here, the same pattern every other registration in this extension
+  // follows (gating.ts's own doc comment).
+  registerResolveScriptConflictsAction(context);
 
   return true;
 }
