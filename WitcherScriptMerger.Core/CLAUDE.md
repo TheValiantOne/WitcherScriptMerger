@@ -455,13 +455,41 @@ competing deletion, a mod's gap comment not making it into the output) is record
 GUI's `MergeReportForm` — a deliberate deferral, not an oversight, since that's UI work
 on the host side rather than engine work here.
 
-**Scope note on non-function content ("gaps"):** a gap is only ever compared, and only
-ever produces a `Decisions` note (never a decline), when it sits between two vanilla
-units both sides kept and neither side inserted anything at that slot — comparison uses
-the same whitespace-tolerant spirit as `IsWhitespaceOnlyDifference` above, deliberately
-NOT comment-stripped (unlike the extraction masking pass) since the whole point is to
-detect when comment *content* differs, not just formatting. Reassembly always keeps
-vanilla's own gap text verbatim regardless.
+**Scope note on non-unit content ("gaps"), revised by gap-handling v2** (see
+`docs/bugs/function-level-merge-gap-handling.md` for the two real, compile-breaking
+defects the original design produced on a live install):
+
+- **Plain member declarations are units now, not gap content.** `[specifiers] var a, b
+  : T;`, `default x = value;`, and `autobind` declarations extract as
+  `ScriptUnitKind.MemberDeclaration` units, so a mod adding/editing one participates in
+  per-unit resolution instead of being silently reverted to vanilla's gap text (that
+  revert dropped mod-added declarations while the code referencing them survived —
+  defect 2). Unit identity is **scope-qualified** (`ScriptUnit.ScopedName`,
+  `"CR4Player::mCSMCR"`, states as `"Combat@CR4Player::phase"`) via a top-level
+  type-range prescan, because member names — unlike function names — recur across the
+  several classes a real `.ws` file contains; `UnitAligner` matches on `ScopedName`.
+- **Insertion slots emit the inserting side's own span.** For a slot where exactly one
+  side inserts units, reassembly emits that side's contiguous text (its gaps + inserted
+  units, verbatim) between its two anchor units, instead of vanilla's gap followed by
+  bare concatenated unit texts — vanilla's gap can contain a class-closing brace, and
+  the old emission placed mod-added class members *after* it, at global scope, with
+  their separators eaten (defect 1). When the span's anchors aren't well-defined (a
+  neighboring vanilla unit deleted on the inserting side) or both sides insert at the
+  same slot, emission falls back to vanilla-gap-plus-line-break-synthesized units —
+  unless the gap carries a structural brace, in which case the file **declines**
+  (placement would be a guess).
+- **A post-reassembly sanity gate** (`PassesReassemblySanityGate`, public so external
+  validation tooling can reuse it) walks the output's structural mask and declines the
+  rescue on any member-shaped declaration at brace depth 0 (an access modifier,
+  `default`, or `var`/`autobind` line — invalid WitcherScript, the exact
+  "`'public' has no sense for global function`" class of compile error), on negative
+  or nonzero final brace depth, or on output that no longer scans cleanly. Validated
+  against the real broken output preserved in `docs/bugs/artifacts/` (gate fails it on
+  exactly the orphaned accessor the game rejected) with zero false positives across
+  real vanilla `r4Player.ws`/`player.ws`/`actor.ws`/`baseEffect.ws`.
+- A gap that still exists between two intact units is compared as before —
+  whitespace-tolerant, deliberately NOT comment-stripped — producing a `Decisions` note
+  when content differs; vanilla's gap text still wins at non-insertion slots.
 
 ## Text-merge input encoding
 

@@ -233,3 +233,7 @@ HANDOFF*.md
 # state into this repo (session logs, caches, scratch indexes), add a scoped
 # entry here rather than committing it - see the AI-assisted development
 # section of CONTRIBUTING.md.
+
+# Local build/packaging scratch + editor config
+dist-local/
+.vscode/
