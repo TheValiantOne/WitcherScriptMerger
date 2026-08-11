@@ -20,22 +20,25 @@ namespace WitcherScriptMerger
 {
 	static class Program
 	{
-		// Must run before anything else in this class's static init, so any
-		// early startup error (e.g. missing App.config) is visible in the
-		// invoking terminal instead of written to an unattached console.
-		static readonly bool _consoleAttached = MaybeAttachConsole();
-
-		// Explicit (empty) static constructor: without one, the C# compiler marks
-		// this class `beforefieldinit`, under which the CLR is free to defer running
-		// _consoleAttached's initializer until Program's own static fields are first
-		// touched - Main() itself no longer counts, since Notifier/Settings/LoadOrder/
-		// Inventory became pass-through properties to AppState (see below) rather than
-		// fields, so nothing in Main() necessarily touches a field of this class at
-		// all. Confirmed empirically with a minimal repro mirroring this exact shape:
-		// without this constructor, the field initializer's side effect (here,
-		// MaybeAttachConsole()) never ran at all during a normal Main() invocation.
-		// Do not remove this without re-verifying that repro.
-		static Program() { }
+		// Explicit static constructor, calling MaybeAttachConsole() directly: it must
+		// run before anything else in this class, so any early startup error (e.g.
+		// missing App.config) is visible in the invoking terminal instead of written
+		// to an unattached console. Two deliberate choices here, both load-bearing:
+		// the explicit constructor (without one, the compiler marks this class
+		// `beforefieldinit`, under which the CLR is free to defer static init - and
+		// Main() no longer necessarily touches a field of this class at all, since
+		// Notifier/Settings/LoadOrder/Inventory became pass-through properties to
+		// AppState below; confirmed empirically with a minimal repro that a field
+		// initializer's side effect never ran during a normal Main() invocation
+		// without it - do not remove without re-verifying that repro), and the call
+		// living IN the constructor body rather than a `static readonly bool
+		// _consoleAttached = ...` field initializer (the previous shape - the field's
+		// value was never read, only its initializer's side effect mattered, which
+		// both tripped CA1823 and obscured that the side effect is the whole point).
+		static Program()
+		{
+			MaybeAttachConsole();
+		}
 
 		// Notifier/Settings/LoadOrder/Inventory live in Core's AppState now, not here -
 		// domain code that moved to Core (Paths, FileMerger, Cli/MergeOperations,
