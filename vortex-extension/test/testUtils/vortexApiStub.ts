@@ -31,6 +31,15 @@ export const selectors = {
     state: { discoveryByGame?: Record<string, { path?: string } | undefined> },
     gameId: string,
   ): { path?: string } | undefined => state?.discoveryByGame?.[gameId],
+  // Added alongside nexusDownloader.ts (bundle-tooling acquisition): real signature
+  // `(state: IState, gameId?: string) => string`, per @nexusmods/vortex-api's own
+  // `lib/api.d.ts`. Deliberately keyed by an explicit fake `downloadPathForGame` map
+  // (same simplified-fake-state philosophy as `discoveryByGame` above) rather than
+  // Vortex's real `state.settings.downloads.path` + per-game-override resolution
+  // logic - nexusDownloader.ts's own tests only need a deterministic directory to join
+  // `IDownload.localPath` onto, not a faithful reimplementation of that resolution.
+  downloadPathForGame: (state: { downloadPathForGame?: Record<string, string> }, gameId?: string): string =>
+    state?.downloadPathForGame?.[gameId ?? ''] ?? '/unexpected/downloadPathForGame',
   profileById: (
     state: { profiles?: Record<string, { gameId?: string } | undefined> },
     profileId: string,
@@ -63,6 +72,15 @@ export const util = {
   writeFileAtomic: async (filePath: string, input: string | Buffer): Promise<void> => {
     await fs.promises.writeFile(filePath, input);
   },
+  // `util.opn` needs a real (no-op) implementation for the same reason as
+  // `writeFileAtomic` above - `statusTile.ts` calls it as a value from a click handler
+  // to open an external link (QuickBMS's homepage, wcc_lite's Nexus mod page) via
+  // Vortex's own "open with the OS default browser" mechanism rather than a bare
+  // `<a target="_blank">` (see that module's own doc comment for why). No test in this
+  // repo actually clicks that link (no React/DOM rendering harness - see
+  // statusTile.test.ts's own doc comment), so this is currently unexercised, but is
+  // still needed for the module to *load* without an undefined `util.opn`.
+  opn: async (_target: string, _wait?: boolean): Promise<void> => undefined,
 };
 
 // `log` needs a real (no-op) implementation because `index.ts` calls it as a value at

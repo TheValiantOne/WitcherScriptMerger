@@ -4,6 +4,7 @@ import { isModOrDependencyInstallActive, notifyConflictsIfChanged } from './conf
 import { isWitcher3Active, WITCHER3_GAME_ID } from './gating';
 import { registerMergeHistoryDashlet } from './mergeHistoryDashlet';
 import { registerResolveScriptConflictsAction } from './resolveAction';
+import { registerWsmStatusDashlet } from './statusTile';
 import { ensureWsmToolRegistered } from './toolAcquisition';
 
 /**
@@ -58,11 +59,41 @@ import { ensureWsmToolRegistered } from './toolAcquisition';
  * directly-in-`main`, gate-on-`isWitcher3Active`-via-`condition` pattern - see
  * `resolveAction.ts`'s own doc comment for how this unit's own action does exactly that.
  *
+ * **Correction (found while building Unit J, applies to every future unit too):** an
+ * earlier version of this comment said later units should add their own
+ * `context.register*` calls *inside* the `context.once(...)` callback below. That's
+ * wrong, and matters for real Vortex behavior, not just style - `@nexusmods/vortex-api`'s
+ * own `lib/api.d.ts` doc comment on `IExtensionContext` is explicit: register functions
+ * "must be called immediately inside the init function," calls to them are "stored and
+ * evaluated once all extensions have been initialised," and `once` (part (c) of that same
+ * doc comment) is documented as being for "all your extension setup *except* for the
+ * register calls (i.e. installing event handlers, doing startup calculations)" - not a
+ * valid place to call a `context.register*` function at all. `registerWsmStatusDashlet`
+ * (this unit's own fifth registration) is therefore called directly in `main`'s own
+ * body, synchronously, before `context.once(...)` - not deferred into it, matching every
+ * other registration above. Every future unit adding a `context.register*` call (an
+ * action, a main page, a settings page, another dashlet) must do the same: call it
+ * directly here, gating *visibility* (not the registration call itself) on
+ * `isWitcher3Active` via that API's own live `condition`/`isVisible` callback instead,
+ * exactly like `registerWsmStatusDashlet` does (see `statusTile.ts`). Only non-register
+ * work - event handlers, one-time startup calculations, anything that reads
+ * `context.api`'s fully-initialized state - belongs inside `context.once`, which is
+ * exactly what `tryRegisterWsmTool` below is (it dispatches a Redux action via
+ * `api.store.dispatch`, not a `context.register*` call, so `context.once` is the right
+ * place for it).
+ *
  * This extension must never call `context.registerGame('witcher3', ...)` - Vortex's own
  * built-in `game-witcher3` extension already owns that registration; this extension is a
  * companion to it, not a replacement.
  */
 function main(context: types.IExtensionContext): boolean {
+  // Unit J: the dependency/status dashlet. Called here, synchronously and
+  // unconditionally, per the register-function contract explained above - never
+  // deferred into context.once. Visibility itself is still gated on Witcher 3 being the
+  // active game, via registerWsmStatusDashlet's own live `isVisible` callback
+  // (statusTile.ts), so this unconditional call doesn't show the tile for other games.
+  registerWsmStatusDashlet(context);
+
   function tryRegisterWsmTool(): void {
     if (!isWitcher3Active(context.api)) {
       log('debug', 'witcherscriptmerger-vortex: active game is not witcher3, extension is idle');

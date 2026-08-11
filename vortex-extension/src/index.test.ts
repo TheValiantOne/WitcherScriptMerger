@@ -2,17 +2,19 @@ import { describe, expect, it, vi } from 'vitest';
 
 // `vi.mock` factories are hoisted above imports, so anything they reference has to come
 // from `vi.hoisted` rather than an ordinary outer-scope `const` - this isolates index.ts's
-// own wiring (what this file actually tests) from toolAcquisition.ts/conflictScan.ts/
-// conflictNotifications.ts's own real behavior, each already thoroughly covered by their
-// own *.test.ts files.
+// own wiring (what this file actually tests) from toolAcquisition.ts/statusTile.ts/
+// conflictScan.ts/conflictNotifications.ts's own real behavior, each already thoroughly
+// covered by their own *.test.ts files.
 const {
   ensureWsmToolRegisteredMock,
+  registerWsmStatusDashletMock,
   isWsmToolAcquiredMock,
   scanWsmConflictsMock,
   notifyConflictsIfChangedMock,
   isModOrDependencyInstallActiveMock,
 } = vi.hoisted(() => ({
   ensureWsmToolRegisteredMock: vi.fn(),
+  registerWsmStatusDashletMock: vi.fn(),
   isWsmToolAcquiredMock: vi.fn(),
   scanWsmConflictsMock: vi.fn(),
   notifyConflictsIfChangedMock: vi.fn(),
@@ -21,6 +23,13 @@ const {
 
 vi.mock('./toolAcquisition', () => ({
   ensureWsmToolRegistered: ensureWsmToolRegisteredMock,
+}));
+
+// Mocked for the same reason as './toolAcquisition' above - isolates index.ts's own
+// wiring from statusTile.ts's real behavior (its own registerDashlet call shape is
+// covered directly by statusTile.test.ts instead).
+vi.mock('./statusTile', () => ({
+  registerWsmStatusDashlet: registerWsmStatusDashletMock,
 }));
 
 vi.mock('./conflictScan', () => ({
@@ -164,6 +173,28 @@ describe('main (index.ts)', () => {
 
     // Let the rejected promise's .catch() handler actually run before the test ends.
     await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  it('registers the WSM status dashlet synchronously inside main() itself, not deferred into context.once', () => {
+    // Per @nexusmods/vortex-api's own lib/api.d.ts doc comment on IExtensionContext:
+    // register functions "must be called immediately inside the init function," and
+    // once is documented as being for extension setup "except for the register calls."
+    // An earlier version of this test (and of index.ts itself) got this backwards -
+    // asserting registerWsmStatusDashlet only fired after fireOnce() - which would have
+    // meant the dashlet's registerDashlet call never actually took effect against a
+    // real Vortex host. This test now asserts the call happens from main(context)
+    // alone, with context.once never fired at all.
+    ensureWsmToolRegisteredMock.mockClear().mockResolvedValue(false);
+    registerWsmStatusDashletMock.mockClear();
+    const { context } = fakeContext('skyrimse');
+
+    main(context);
+
+    expect(registerWsmStatusDashletMock).toHaveBeenCalledTimes(1);
+    expect(registerWsmStatusDashletMock).toHaveBeenCalledWith(context);
+    // Still isn't gated on isWitcher3Active - statusTile.ts's own registerDashlet call
+    // supplies a live isVisible callback instead (covered by statusTile.test.ts).
+    expect(ensureWsmToolRegisteredMock).not.toHaveBeenCalled();
   });
 
   it('registers the "Resolve Script Conflicts" action directly (not deferred through context.once), gated live on witcher3 being active', () => {

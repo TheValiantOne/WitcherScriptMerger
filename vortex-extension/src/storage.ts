@@ -21,15 +21,17 @@ import { types } from 'vortex-api';
  *     downloads/            <- scratch .zip downloads before extraction; safe to delete
  *                              entirely at any time (toolAcquisition.ts treats it as a
  *                              cache, not a source of truth).
- *     bundle-tools/         <- CONVENTION for a later unit (bundle-tooling acquisition,
- *                              not implemented here - see this unit's PR description):
- *                              QuickBMS (quickbms.exe + witcher3.bms) and wcc_lite should
- *                              land under here once that unit exists, and
- *                              WSM_QuickBmsPath/WSM_QuickBmsPluginPath/WSM_WccLitePath
- *                              (see wsmEnv.ts) should point inside it, e.g.
+ *     bundle-tools/         <- QuickBMS (quickbms.exe + witcher3.bms) and wcc_lite
+ *                              (see bundleTools.ts's detection logic and
+ *                              wccLiteAcquisition.ts's wcc_lite auto-download) land
+ *                              under here, e.g.
  *                              path.join(getBundleToolsDir(api), 'QuickBMS', 'quickbms.exe').
- *                              Exported now, specifically so that later unit doesn't have
- *                              to re-derive where this extension keeps its own files.
+ *                              WSM_QuickBmsPath/WSM_QuickBmsPluginPath/WSM_WccLitePath
+ *                              (see wsmEnv.ts) are populated from these paths by
+ *                              wsmStatusSummary.ts today; the sibling units driving
+ *                              actual bundle-content merges should reuse
+ *                              bundleTools.ts's detectBundleTools(api) too, rather than
+ *                              re-deriving this layout independently.
  */
 const EXTENSION_STORAGE_DIRNAME = 'witcherscriptmerger-vortex';
 const TOOL_SUBDIR = 'tool';
@@ -55,7 +57,8 @@ export function getDownloadCacheDir(api: types.IExtensionApi): string {
   return path.join(getExtensionStorageDir(api), DOWNLOAD_CACHE_SUBDIR);
 }
 
-/** See this module's own doc comment above - convention for a later unit, unused here. */
+/** See this module's own doc comment above - QuickBMS/wcc_lite land under here (used by
+ *  `bundleTools.ts`'s detection and `wccLiteAcquisition.ts`'s auto-download). */
 export function getBundleToolsDir(api: types.IExtensionApi): string {
   return path.join(getExtensionStorageDir(api), BUNDLE_TOOLS_SUBDIR);
 }
