@@ -2,6 +2,7 @@ import { log, selectors, types } from 'vortex-api';
 import { isWsmToolAcquired, scanWsmConflicts } from './conflictScan';
 import { isModOrDependencyInstallActive, notifyConflictsIfChanged } from './conflictNotifications';
 import { isWitcher3Active, WITCHER3_GAME_ID } from './gating';
+import { registerMergeHistoryDashlet } from './mergeHistoryDashlet';
 import { registerWsmStatusDashlet } from './statusTile';
 import { ensureWsmToolRegistered } from './toolAcquisition';
 
@@ -39,6 +40,18 @@ import { ensureWsmToolRegistered } from './toolAcquisition';
  * onDidDeploy(context.api))`) both register it that way - see this unit's PR
  * description for the exact citations.
  *
+ * This unit (the merge-history dashlet) adds the third real registration:
+ * `registerMergeHistoryDashlet` (`./mergeHistoryDashlet`), called directly in `main`,
+ * NOT deferred into the `context.once(...)` callback below - `IExtensionContext.once`'s
+ * own doc comment (`@nexusmods/vortex-api`'s `lib/api.d.ts`) says registration calls are
+ * expected to have already happened by the time `once` fires, matching every
+ * `registerDashlet`/`registerAction` call site in Vortex's own built-in extensions
+ * (none of them defer through `once`). Each registration instead gates on
+ * `isWitcher3Active` (imported from `./gating`) via its own `condition`/`isVisible`
+ * callback, so a live game-mode switch is honored without requiring a Vortex restart -
+ * the declarative counterpart to how `tryRegisterWsmTool` below re-checks the same
+ * condition imperatively on every `'gamemode-activated'` event.
+ *
  * **Correction (found while building Unit J, applies to every future unit too):** an
  * earlier version of this comment said later units should add their own
  * `context.register*` calls *inside* the `context.once(...)` callback below. That's
@@ -49,13 +62,14 @@ import { ensureWsmToolRegistered } from './toolAcquisition';
  * doc comment) is documented as being for "all your extension setup *except* for the
  * register calls (i.e. installing event handlers, doing startup calculations)" - not a
  * valid place to call a `context.register*` function at all. `registerWsmStatusDashlet`
- * below is therefore called directly in `main`'s own body, synchronously, before
- * `context.once(...)` - not deferred into it. Every future unit adding a
- * `context.register*` call (an action, a main page, a settings page, another dashlet)
- * must do the same: call it directly here, gating *visibility* (not the registration call
- * itself) on `isWitcher3Active` via that API's own live `condition`/`isVisible` callback
- * instead, exactly like `registerWsmStatusDashlet` does (see `statusTile.ts`). Only
- * non-register work - event handlers, one-time startup calculations, anything that reads
+ * (this unit's own fourth registration) is therefore called directly in `main`'s own
+ * body, synchronously, before `context.once(...)` - not deferred into it, matching
+ * `registerMergeHistoryDashlet` above. Every future unit adding a `context.register*`
+ * call (an action, a main page, a settings page, another dashlet) must do the same: call
+ * it directly here, gating *visibility* (not the registration call itself) on
+ * `isWitcher3Active` via that API's own live `condition`/`isVisible` callback instead,
+ * exactly like `registerWsmStatusDashlet` does (see `statusTile.ts`). Only non-register
+ * work - event handlers, one-time startup calculations, anything that reads
  * `context.api`'s fully-initialized state - belongs inside `context.once`, which is
  * exactly what `tryRegisterWsmTool` below is (it dispatches a Redux action via
  * `api.store.dispatch`, not a `context.register*` call, so `context.once` is the right
@@ -173,6 +187,12 @@ function main(context: types.IExtensionContext): boolean {
       });
     }
   }
+
+  // Registered synchronously here, not inside context.once below - see
+  // mergeHistoryDashlet.ts's own registerMergeHistoryDashlet doc comment for why a
+  // register call specifically must not be deferred into once, unlike
+  // tryRegisterWsmTool's legitimate use of once just above.
+  registerMergeHistoryDashlet(context);
 
   context.once(() => {
     tryRegisterWsmTool();

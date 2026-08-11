@@ -10,7 +10,7 @@
     "watch": "webpack --config webpack.config.cjs --mode development --watch",
     "lint": "eslint src test",
     "test": "vitest run src",
-    "test:integration": "vitest run test"
+    "test:integration": "vitest run test --no-file-parallelism"
   },
   "overrides": {
     "react": "16.14.0",
