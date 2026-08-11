@@ -130,6 +130,11 @@ export async function resolveScriptConflicts(
     try {
       preview = await runMergeConflictsWorkflow(api, connect, tool.path, env, {
         dryRun: true,
+        // overwrite so the preview answers "would this auto-solve?" for
+        // already-merged conflicts too - without it, the server can only predict
+        // "skipped: output already exists" for them, and this preview exists to show
+        // what the real (also-overwrite) run below will actually do.
+        overwrite: true,
         activityMessage: 'Scanning for mergeable script conflicts...',
       });
     } catch (err) {
@@ -162,6 +167,11 @@ export async function resolveScriptConflicts(
     try {
       result = await runMergeConflictsWorkflow(api, connect, tool.path, env, {
         dryRun: false,
+        // A Vortex-driven re-merge is exactly the "source mod updated, stale merged
+        // output should be rebuilt" case overwrite exists for - see
+        // MergeConflictsArgs.overwrite's own doc comment (including version-skew
+        // behavior against a pre-overwrite WSM build).
+        overwrite: true,
         activityMessage: 'Merging script conflicts...',
       });
     } catch (err) {

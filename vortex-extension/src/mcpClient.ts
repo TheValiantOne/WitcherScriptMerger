@@ -88,6 +88,17 @@ export interface MergeConflictsArgs {
   relativePaths?: string[];
   orderOverrides?: Record<string, string[]>;
   dryRun?: boolean;
+  /**
+   * Refresh conflicts whose merged output already exists (e.g. after a source mod
+   * updated). Without it the server skips already-merged conflicts with a clear
+   * reason - it never silently rebuilds them - which is the wrong default for a mod
+   * manager's own re-merge flow: a Vortex deployment changing a source mod is exactly
+   * the situation where the stale merged output SHOULD be rebuilt. Requires a WSM
+   * build with `merge_conflicts` overwrite support (> 0.6.2); an older server ignores
+   * unknown tool arguments, degrading to its previous skip behavior rather than
+   * erroring.
+   */
+  overwrite?: boolean;
 }
 
 export interface MergeConflictsResult {

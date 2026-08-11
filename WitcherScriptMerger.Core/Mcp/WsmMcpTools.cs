@@ -70,7 +70,11 @@ namespace WitcherScriptMerger.Mcp
 				"listed, even if it shows up as a source because the file was already merged " +
 				"once).")] Dictionary<string, string[]> orderOverrides = null,
 			[Description("If true, evaluates which conflicts would auto-solve without writing any " +
-				"merged output, repacking any bundle, or modifying MergeInventory.xml.")] bool dryRun = false)
+				"merged output, repacking any bundle, or modifying MergeInventory.xml.")] bool dryRun = false,
+			[Description("If true, refreshes conflicts whose merged output already exists (e.g. " +
+				"after a source mod updated). Without it, an already-merged conflict is skipped " +
+				"with a clear reason rather than silently rebuilt - and a dry run can only " +
+				"predict that skip, not whether the refreshed merge would auto-solve.")] bool overwrite = false)
 		{
 			// Validated before touching the mods folder or dependency state: this is pure
 			// input validation the caller controls, so it should fail fast and
@@ -139,7 +143,7 @@ namespace WitcherScriptMerger.Mcp
 						kv => kv.Value,
 						StringComparer.OrdinalIgnoreCase);
 
-				var summary = MergeOperations.RunMerge(AppState.Inventory, conflicts, mergedModName, normalizedOrderOverrides, dryRun);
+				var summary = MergeOperations.RunMerge(AppState.Inventory, conflicts, mergedModName, normalizedOrderOverrides, dryRun, overwrite);
 
 				// FileMerger guarantees a dry run never adds or updates records in the
 				// loaded inventory (see MergeConflictsHeadless), but skipping the disk
@@ -148,7 +152,7 @@ namespace WitcherScriptMerger.Mcp
 				if (!dryRun)
 					AppState.Inventory.Save();
 
-				return new { merged = summary.Merged, skipped = summary.Skipped, unmatched, dryRun, functionLevelDecisions = summary.FunctionLevelDecisions };
+				return new { merged = summary.Merged, skipped = summary.Skipped, unmatched, dryRun, overwrite, functionLevelDecisions = summary.FunctionLevelDecisions };
 			}
 		}
 

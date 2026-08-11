@@ -186,10 +186,13 @@ namespace WitcherScriptMerger
 			}
 
 			string orderFilePath = null;
+			var overwrite = false;
 			for (int i = 1; i < args.Length; ++i)
 			{
 				if (args[i] == "--order-file" && i + 1 < args.Length)
 					orderFilePath = args[++i];
+				else if (args[i] == "--overwrite")
+					overwrite = true;
 				else
 				{
 					Console.Error.WriteLine($"Unknown argument: {args[i]}");
@@ -219,7 +222,7 @@ namespace WitcherScriptMerger
 				return 0;
 			}
 
-			var summary = MergeOperations.RunMerge(Inventory, modIndex.Conflicts, mergedModName, orderOverrides);
+			var summary = MergeOperations.RunMerge(Inventory, modIndex.Conflicts, mergedModName, orderOverrides, dryRun: false, overwrite: overwrite);
 
 			Inventory.Save();
 
