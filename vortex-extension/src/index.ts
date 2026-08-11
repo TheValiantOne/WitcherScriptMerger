@@ -3,6 +3,7 @@ import { isWsmToolAcquired, scanWsmConflicts } from './conflictScan';
 import { isModOrDependencyInstallActive, notifyConflictsIfChanged } from './conflictNotifications';
 import { isWitcher3Active, WITCHER3_GAME_ID } from './gating';
 import { registerMergeHistoryDashlet } from './mergeHistoryDashlet';
+import { registerResolveScriptConflictsAction } from './resolveAction';
 import { ensureWsmToolRegistered } from './toolAcquisition';
 
 /**
@@ -49,8 +50,13 @@ import { ensureWsmToolRegistered } from './toolAcquisition';
  * `isWitcher3Active` (imported from `./gating`) via its own `condition`/`isVisible`
  * callback, so a live game-mode switch is honored without requiring a Vortex restart -
  * the declarative counterpart to how `tryRegisterWsmTool` below re-checks the same
- * condition imperatively on every `'gamemode-activated'` event. Later units (the resolve
- * action, status tile) follow this same directly-in-`main` pattern.
+ * condition imperatively on every `'gamemode-activated'` event.
+ *
+ * This unit (the resolve action) adds the fourth real registration:
+ * `registerResolveScriptConflictsAction` (`./resolveAction`), called directly in `main`
+ * alongside `registerMergeHistoryDashlet` above, following the exact same
+ * directly-in-`main`, gate-on-`isWitcher3Active`-via-`condition` pattern - see
+ * `resolveAction.ts`'s own doc comment for how this unit's own action does exactly that.
  *
  * This extension must never call `context.registerGame('witcher3', ...)` - Vortex's own
  * built-in `game-witcher3` extension already owns that registration; this extension is a
@@ -169,6 +175,12 @@ function main(context: types.IExtensionContext): boolean {
     context.api.events.on('gamemode-activated', tryRegisterWsmTool);
     context.api.onAsync('did-deploy', checkForConflictsAfterDeploy);
   });
+
+  // This unit's own registration - see resolveAction.ts's own doc comment for why it
+  // gates on Witcher 3 being active via a live `condition` callback rather than an
+  // upfront check here, the same pattern every other registration in this extension
+  // follows (gating.ts's own doc comment).
+  registerResolveScriptConflictsAction(context);
 
   return true;
 }

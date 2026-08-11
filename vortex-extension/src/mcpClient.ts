@@ -95,6 +95,18 @@ export interface MergeConflictsResult {
   skipped: string[];
   unmatched: string[];
   dryRun: boolean;
+  /**
+   * Human-readable audit-trail lines from the function-level merge fallback (splits a
+   * conflicting `.ws` file into individual functions and resolves each independently
+   * when the whole-file merge can't) - see `WsmMcpTools.MergeConflicts`'s own
+   * description (`WitcherScriptMerger.Core/Mcp/WsmMcpTools.cs`) and
+   * `FileMerger.HeadlessMergeSummary.FunctionLevelDecisions`
+   * (`WitcherScriptMerger.Core/Inventory/FileMerger.cs`, a `List<string>` server-side -
+   * confirmed directly against both files rather than assumed). Empty when no conflict
+   * needed the fallback. Genuinely useful to a user, not just noise - always worth
+   * surfacing, not just the merged/skipped counts.
+   */
+  functionLevelDecisions: string[];
 }
 
 export interface GetStatusResult {

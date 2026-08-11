@@ -37,15 +37,17 @@ import main from './index';
 import { WITCHER3_GAME_ID } from './gating';
 
 /** A minimal stand-in for IExtensionContext - just enough surface for index.ts's own
- *  logic (context.once, context.registerDashlet, context.api.getState/events.on/onAsync),
- *  matching gating.test.ts's own fakeApi philosophy: a simplified fake, not a replica of
- *  Vortex's real context shape.
+ *  logic (context.once, context.api.getState/events.on/onAsync, context.registerAction/
+ *  registerDashlet - the register calls added alongside resolveAction.ts's and
+ *  mergeHistoryDashlet.ts's own registrations, both called directly at `main()` time per
+ *  IExtensionContext.once's own doc comment - see index.ts's own updated header comment
+ *  for why that's NOT deferred through context.once), matching gating.test.ts's own
+ *  fakeApi philosophy: a simplified fake, not a replica of Vortex's real context shape.
  *
- *  `registerDashlet` needs a real (no-op) implementation, not just a type - added
- *  alongside mergeHistoryDashlet.ts's registerMergeHistoryDashlet, which main() now calls
- *  synchronously (see index.ts's own comment on why that call sits outside context.once)
- *  - without this, every test below would throw "context.registerDashlet is not a
- *  function" the moment main(context) runs.
+ *  `registerDashlet` needs a real (no-op) implementation, not just a type - without this,
+ *  every test below would throw "context.registerDashlet is not a function" the moment
+ *  main(context) runs; mergeHistoryDashlet.test.ts covers registerMergeHistoryDashlet's
+ *  own argument-shape/gating behavior directly.
  *
  *  `profiles` backs `selectors.profileById` (via the shared `vortexApiStub.ts`) -
  *  `checkForConflictsAfterDeploy` (index.ts) resolves `did-deploy`'s own `profileId`
@@ -59,11 +61,13 @@ function fakeContext(initialActiveGameId: string | undefined, profiles: Record<s
   let onceCallback: (() => void) | undefined;
   const eventListeners = new Map<string, Array<() => void>>();
   const asyncListeners = new Map<string, (...args: unknown[]) => Promise<unknown>>();
+  const registerActionMock = vi.fn();
 
   const context = {
     once: (callback: () => void) => {
       onceCallback = callback;
     },
+    registerAction: registerActionMock,
     registerDashlet: (..._args: unknown[]) => {
       // Intentionally a no-op in tests - mergeHistoryDashlet.test.ts covers
       // registerMergeHistoryDashlet's own argument-shape/gating behavior directly.
@@ -91,6 +95,7 @@ function fakeContext(initialActiveGameId: string | undefined, profiles: Record<s
     setActiveGame: (gameId: string | undefined) => {
       state.activeGameId = gameId;
     },
+    registerActionMock,
   };
 }
 
@@ -159,6 +164,34 @@ describe('main (index.ts)', () => {
 
     // Let the rejected promise's .catch() handler actually run before the test ends.
     await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  it('registers the "Resolve Script Conflicts" action directly (not deferred through context.once), gated live on witcher3 being active', () => {
+    const { context, registerActionMock, setActiveGame } = fakeContext('skyrimse');
+
+    main(context);
+
+    // Registered synchronously by main() itself - IExtensionContext.once's own doc
+    // comment says registrations are expected to have already happened by the time
+    // `once` fires, so this must not require fireOnce() to have been called at all.
+    expect(registerActionMock).toHaveBeenCalledTimes(1);
+    const [group, , , , title, , condition] = registerActionMock.mock.calls[0] as [
+      string,
+      number,
+      string,
+      unknown,
+      string,
+      unknown,
+      () => boolean,
+    ];
+    expect(group).toBe('mod-icons');
+    expect(title).toBe('Resolve Script Conflicts');
+
+    // The condition callback is live, re-evaluated against current state each time
+    // Vortex calls it - not baked in once at registration time.
+    expect(condition()).toBe(false);
+    setActiveGame(WITCHER3_GAME_ID);
+    expect(condition()).toBe(true);
   });
 
   describe('did-deploy conflict scanning', () => {
