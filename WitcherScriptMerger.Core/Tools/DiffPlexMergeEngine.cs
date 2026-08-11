@@ -189,7 +189,7 @@ namespace WitcherScriptMerger.Tools
 			if (!hasVanillaVersion)
 			{
 				AppState.Notifier.ShowMessage(
-					$"Skipped {source1.Name} + {source2.Name}: no vanilla version of this file could be found, " +
+					$"Skipped {oldDescription ?? source1.Name} + {newDescription ?? source2.Name}: no vanilla version of this file could be found, " +
 					"so a 3-way merge isn't possible.",
 					"Skipped", NotifyButtons.OK, DialogIcon.Warning);
 				return MergeEngineResult.NeedsManualResolution;
@@ -209,7 +209,7 @@ namespace WitcherScriptMerger.Tools
 				&& source2.Hash != null && source2.Hash.IsOutdated)
 			{
 				AppState.Notifier.ShowMessage(
-					$"Skipped {source1.Name} + {source2.Name}: merging an updated mod file into a merge " +
+					$"Skipped {oldDescription ?? source1.Name} + {newDescription ?? source2.Name}: merging an updated mod file into a merge " +
 					"created with a previous version needs manual review (auto-solving could keep changes " +
 					"from the previous version that have been removed in the new one).",
 					"Skipped", NotifyButtons.OK, DialogIcon.Warning);
@@ -244,7 +244,7 @@ namespace WitcherScriptMerger.Tools
 				// starting point at all - genuinely needs the source files opened side by
 				// side and compared by hand.
 				AppState.Notifier.ShowMessage(
-					$"Skipped {source1.Name} + {source2.Name}: the automatic 3-way merge algorithm hit " +
+					$"Skipped {oldDescription ?? source1.Name} + {newDescription ?? source2.Name}: the automatic 3-way merge algorithm hit " +
 					$"an internal inconsistency it couldn't safely recover from ({ex.Message}) - a known " +
 					"limitation of the underlying DiffPlex library for certain multi-edit conflicts, see " +
 					"CLAUDE.md. Needs manual resolution - open the source mod files directly to compare " +
@@ -331,7 +331,7 @@ namespace WitcherScriptMerger.Tools
 					? " - opened it for review."
 					: " - open it manually to review.";
 			AppState.Notifier.ShowMessage(
-				$"Skipped {source1.Name} + {source2.Name}: genuine conflict, needs manual resolution. " +
+				$"Skipped {oldDescription ?? source1.Name} + {newDescription ?? source2.Name}: genuine conflict, needs manual resolution. " +
 				$"Conflict markers were written to {sidecarFullPath}{openSuffix}",
 				"Skipped", NotifyButtons.OK, DialogIcon.Warning);
 
@@ -454,7 +454,7 @@ namespace WitcherScriptMerger.Tools
 				// carries MCP JSON-RPC frames only when running under the mcp verb,
 				// and writing arbitrary text there would corrupt the protocol stream.
 				AppState.Notifier.ShowMessage(
-					$"Function-level merge rescue hit an unexpected error for {source1.Name} + {source2.Name} " +
+					$"Function-level merge rescue hit an unexpected error for {oldDescription ?? source1.Name} + {newDescription ?? source2.Name} " +
 					$"({ex.GetType().Name}: {ex.Message}) - falling back to the whole-file result.",
 					"Function-level rescue error", NotifyButtons.OK, DialogIcon.Warning);
 				return false;
@@ -476,8 +476,15 @@ namespace WitcherScriptMerger.Tools
 				// run (openConflictMarkers is false only for the dry-run caller), so
 				// it's reachable far more often than the exception-logging branch.
 				var previewSuffix = openConflictMarkers ? "" : " (dry run preview - nothing was actually written)";
+				// oldDescription/newDescription, not source1.Name/source2.Name: past a
+				// merge chain's first step, source1 is the previous step's accumulated
+				// temp file, whose MergeSource.Name resolves from its path (observed
+				// mislabeling a dry run's flat-file chain as "Merged Bundle Content" -
+				// a temp-root folder name - during live regression). The decision lines
+				// inside this same message already used the caller-threaded
+				// descriptions; the header just never caught up.
 				AppState.Notifier.ShowMessage(
-					$"Merged {source1.Name} + {source2.Name} at the function level after the whole-file merge " +
+					$"Merged {oldDescription ?? source1.Name} + {newDescription ?? source2.Name} at the function level after the whole-file merge " +
 					$"couldn't auto-solve it{previewSuffix}:\n\n" + string.Join("\n", result.Decisions),
 					"Merged (function-level)", NotifyButtons.OK, DialogIcon.Warning);
 			}
