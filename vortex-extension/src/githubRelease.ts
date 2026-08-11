@@ -18,6 +18,14 @@ import * as https from 'https';
 export const DEFAULT_WSM_REPO = 'TheValiantOne/WitcherScriptMerger';
 
 /**
+ * The WSM version the status dashlet's "Download WitcherScriptMerger" action acquires -
+ * the single place this number lives in the extension. Matches the release tag
+ * (`v<version>`) and `WitcherScriptMerger.Headless.csproj`'s own `<Version>`; bump it
+ * alongside a new WSM release once that release's assets are published.
+ */
+export const DEFAULT_WSM_VERSION = '0.6.2';
+
+/**
  * Windows-only for now, matching Vortex itself being Windows-only today (see
  * `docs/vortex-extension-design.md`, Open Question 8) - not a hardcoded assumption
  * baked in silently, just the only platform this extension can actually run on right

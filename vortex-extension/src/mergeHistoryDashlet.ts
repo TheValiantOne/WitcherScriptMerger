@@ -1,11 +1,8 @@
-import * as fs from 'fs';
-import * as path from 'path';
 import * as React from 'react';
 import { Dashlet, types } from 'vortex-api';
 import { isWitcher3Active } from './gating';
 import { RecordedMerge, WsmMcpClient } from './mcpClient';
-import { getWsmToolDir } from './storage';
-import { WSM_HEADLESS_EXE_NAME } from './toolAcquisition';
+import { resolveWsmExePathIfUsable } from './wsmToolPath';
 
 /**
  * Dashboard tile listing every merge already recorded in `MergeInventory.xml` (relative
@@ -45,23 +42,16 @@ export type MergeHistoryResult =
   | { status: 'loaded'; merges: RecordedMerge[] };
 
 /**
- * Absolute path to the acquired WSM Headless exe, or `null` if none has been acquired
- * yet. Same computation `toolAcquisition.ts`'s own `ensureWsmToolRegistered` (and
- * `acquireWsmToolUncoordinated`) uses (`getWsmToolDir(api)` + `WSM_HEADLESS_EXE_NAME`) -
- * deliberately not read from Vortex's discovered-tools Redux state instead, since that
- * state's own `executable` field has an unverified persistence story (see
- * `discoveredTool.ts`'s own doc comment), while this plain filesystem check is exactly as
- * reliable as the acquisition path that produced it.
- *
- * **Known duplication, not an oversight**: this two-line computation now exists in three
- * places (here and `toolAcquisition.ts`'s two call sites). Not factored into a shared
- * helper in `storage.ts`/`toolAcquisition.ts` because this unit's own scope keeps both of
- * those files read-only ("beyond reading them" - see this unit's own task description);
- * a later unit touching either file is better positioned to extract one.
+ * Absolute path to the WSM Headless exe this extension should use, or `null` when
+ * nothing usable resolves. Now just the central resolver (`wsmToolPath.ts` - user
+ * override first, then the managed install); this module's former private copy of the
+ * managed-path computation was the "known duplication, not an oversight" its own
+ * comment promised a later unit would extract. Still deliberately not read from
+ * Vortex's discovered-tools Redux state - see `discoveredTool.ts` on that state's
+ * unverified persistence story.
  */
-export function resolveWsmExePath(api: types.IExtensionApi): string | null {
-  const exePath = path.join(getWsmToolDir(api), WSM_HEADLESS_EXE_NAME);
-  return fs.existsSync(exePath) ? exePath : null;
+export async function resolveWsmExePath(api: types.IExtensionApi): Promise<string | null> {
+  return (await resolveWsmExePathIfUsable(api)) ?? null;
 }
 
 /**
@@ -75,7 +65,7 @@ export async function fetchMergeHistory(
   api: types.IExtensionApi,
   deps: MergeHistoryFetchDeps = {},
 ): Promise<MergeHistoryResult> {
-  const exePath = resolveWsmExePath(api);
+  const exePath = await resolveWsmExePath(api);
   if (exePath === null) {
     return { status: 'not-installed' };
   }

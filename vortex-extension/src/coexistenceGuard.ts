@@ -479,7 +479,15 @@ export async function refreshCoexistenceState(api: types.IExtensionApi, deps: Re
 
     let client: WsmMcpClient | undefined;
     try {
-      client = await connect({ exePath: getWsmExePath(api), env, requestTimeoutMs: COEXISTENCE_CHECK_TIMEOUT_MS });
+      const exePath = await getWsmExePath(api);
+      if (exePath === undefined) {
+        // isWsmToolAcquired above said yes, so this is the (documented) TOCTOU window
+        // or a just-broken override - skip this check cycle, same non-fatal shape as
+        // every other failure here.
+        log('debug', 'witcherscriptmerger-vortex: WSM exe no longer resolved - skipping coexistence-state check');
+        return;
+      }
+      client = await connect({ exePath, env, requestTimeoutMs: COEXISTENCE_CHECK_TIMEOUT_MS });
       const snapshot = await computeMergeStateSnapshot(client);
       checkCoexistenceDrift(api, snapshot);
     } finally {

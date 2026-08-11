@@ -1,10 +1,7 @@
-import * as fs from 'fs';
-import * as path from 'path';
 import { selectors, types } from 'vortex-api';
 import { WITCHER3_GAME_ID } from './gating';
 import { ScanConflictsResult, WsmMcpClient } from './mcpClient';
-import { getWsmToolDir } from './storage';
-import { WSM_HEADLESS_EXE_NAME } from './toolAcquisition';
+import { resolveWsmExePathIfUsable } from './wsmToolPath';
 import { buildWsmEnv, mergeWithProcessEnv } from './wsmEnv';
 
 /**
@@ -28,15 +25,13 @@ import { buildWsmEnv, mergeWithProcessEnv } from './wsmEnv';
  * `gating.ts`'s own general rule.
  */
 
-/** Absolute path to the WSM Headless exe this extension would have acquired, per
- *  `storage.ts`'s layout convention - does not check whether it actually exists on
- *  disk (see `isWsmToolAcquired` below for that). */
-export function getWsmExePath(api: types.IExtensionApi): string {
-  return path.join(getWsmToolDir(api), WSM_HEADLESS_EXE_NAME);
-}
-
-function isEnoent(err: unknown): boolean {
-  return typeof err === 'object' && err !== null && (err as NodeJS.ErrnoException).code === 'ENOENT';
+/** Absolute path to the WSM Headless exe this extension should use - the central
+ *  resolver's answer (user override first, then the managed install; see
+ *  `wsmToolPath.ts`), or undefined when nothing usable is resolved. Kept as a named
+ *  re-export here because this module's callers (coexistenceGuard.ts) already import
+ *  it under this name. */
+export async function getWsmExePath(api: types.IExtensionApi): Promise<string | undefined> {
+  return resolveWsmExePathIfUsable(api);
 }
 
 /**
@@ -56,15 +51,7 @@ function isEnoent(err: unknown): boolean {
  * `pathExists`'s own doc comment calls out.
  */
 export async function isWsmToolAcquired(api: types.IExtensionApi): Promise<boolean> {
-  try {
-    await fs.promises.access(getWsmExePath(api));
-    return true;
-  } catch (err) {
-    if (isEnoent(err)) {
-      return false;
-    }
-    throw err;
-  }
+  return (await resolveWsmExePathIfUsable(api)) !== undefined;
 }
 
 /**
@@ -142,8 +129,15 @@ async function scanWsmConflictsUncoordinated(api: types.IExtensionApi): Promise<
   // rejects, and index.ts's own try/catch around this call already logs it as a
   // warning rather than crashing or hanging. Worth documenting, not worth adding
   // synchronization machinery for a rare, already-safely-handled race.
+  const exePath = await getWsmExePath(api);
+  if (exePath === undefined) {
+    throw new Error(
+      'No usable WitcherScriptMerger executable is resolved (not acquired yet, or the ' +
+        'configured override path no longer exists - see the WitcherScriptMerger Status dashlet).',
+    );
+  }
   const client = await WsmMcpClient.connect({
-    exePath: getWsmExePath(api),
+    exePath,
     env,
     requestTimeoutMs: POST_DEPLOY_SCAN_TIMEOUT_MS,
   });
