@@ -30,10 +30,11 @@ namespace WitcherScriptMerger.Cli
 			IEnumerable<ModFile> conflicts,
 			string mergedModName,
 			IReadOnlyDictionary<string, string[]> orderOverrides,
-			bool dryRun = false)
+			bool dryRun = false,
+			bool overwrite = false)
 		{
 			var merger = new FileMerger(inventory);
-			return merger.MergeConflictsHeadless(conflicts, mergedModName, orderOverrides, dryRun);
+			return merger.MergeConflictsHeadless(conflicts, mergedModName, orderOverrides, dryRun, overwrite);
 		}
 	}
 }

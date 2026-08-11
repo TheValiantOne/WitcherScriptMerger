@@ -346,4 +346,49 @@ describe('WsmMcpClient integration - real merge round trip (auto-solve + genuine
       await client.close();
     }
   }, 30_000);
+
+  // Depends on the previous test having really merged itemA.ws - vitest runs tests in
+  // a file in declaration order, and this whole describe block already relies on that
+  // (the dry-run test asserts the merged file does NOT exist yet).
+  it('re-merging skips an already-merged file without overwrite, and refreshes it with overwrite: true', async () => {
+    const client = await WsmMcpClient.connect({ exePath: mergeExePath });
+    try {
+      const mergedScriptPath = path.join(
+        mergeScratchDir,
+        'Mods',
+        'mod0000_MergedFiles',
+        'content',
+        'scripts',
+        'game',
+        'itemA.ws',
+      );
+      expect(fs.existsSync(mergedScriptPath)).toBe(true);
+      const beforeMtime = fs.statSync(mergedScriptPath).mtimeMs;
+
+      // Without overwrite: the already-merged file is a reported skip (the server
+      // never silently rebuilds an existing merge), and a dry run predicts the same.
+      const skippedPreview = await client.mergeConflicts({ dryRun: true });
+      expect(skippedPreview.merged).toEqual([]);
+      expect(skippedPreview.skipped).toContain(MERGED_SCRIPT_RELATIVE_PATH);
+
+      const skippedRun = await client.mergeConflicts({ dryRun: false });
+      expect(skippedRun.merged).toEqual([]);
+      expect(skippedRun.skipped).toContain(MERGED_SCRIPT_RELATIVE_PATH);
+      expect(fs.statSync(mergedScriptPath).mtimeMs).toBe(beforeMtime);
+
+      // With overwrite: the dry run can now answer "would this auto-solve?" for the
+      // already-merged file, and the real run actually refreshes it.
+      const overwritePreview = await client.mergeConflicts({ dryRun: true, overwrite: true });
+      expect(overwritePreview.merged).toEqual([MERGED_SCRIPT_RELATIVE_PATH]);
+      expect(fs.statSync(mergedScriptPath).mtimeMs).toBe(beforeMtime);
+
+      const overwriteRun = await client.mergeConflicts({ dryRun: false, overwrite: true });
+      expect(overwriteRun.merged).toEqual([MERGED_SCRIPT_RELATIVE_PATH]);
+      const refreshedText = fs.readFileSync(mergedScriptPath, 'utf16le');
+      expect(refreshedText).toContain('a = 100;');
+      expect(refreshedText).toContain('b = 200;');
+    } finally {
+      await client.close();
+    }
+  }, 30_000);
 });

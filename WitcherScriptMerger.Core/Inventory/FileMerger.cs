@@ -482,7 +482,8 @@ namespace WitcherScriptMerger.Inventory
 			IEnumerable<ModFile> conflicts,
 			string mergedModName,
 			IReadOnlyDictionary<string, string[]> orderOverrides,
-			bool dryRun = false)
+			bool dryRun = false,
+			bool overwrite = false)
 		{
 			var summary = new HeadlessMergeSummary();
 
@@ -519,8 +520,8 @@ namespace WitcherScriptMerger.Inventory
 
 				var isBundle = conflict.Category == Categories.BundleText;
 				var fullyMerged = isBundle
-					? MergeBundleConflictHeadless(conflict, merge, orderedNames, dryRun)
-					: MergeFlatConflictHeadless(conflict, merge, mergedModName, orderedNames, dryRun);
+					? MergeBundleConflictHeadless(conflict, merge, orderedNames, dryRun, overwrite)
+					: MergeFlatConflictHeadless(conflict, merge, mergedModName, orderedNames, dryRun, overwrite);
 
 				if (!fullyMerged)
 				{
@@ -587,7 +588,7 @@ namespace WitcherScriptMerger.Inventory
 			return summary;
 		}
 
-		bool MergeFlatConflictHeadless(ModFile conflict, Merge merge, string mergedModName, string[] orderedNames, bool dryRun)
+		bool MergeFlatConflictHeadless(ModFile conflict, Merge merge, string mergedModName, string[] orderedNames, bool dryRun, bool overwrite)
 		{
 			var firstHash = conflict.Mods.First(h => h.Name.EqualsIgnoreCase(orderedNames[0]));
 			var source1 = MergeSource.FromFlatFile(new FileInfo(conflict.GetModFile(orderedNames[0])), firstHash);
@@ -597,14 +598,22 @@ namespace WitcherScriptMerger.Inventory
 				Path.Combine(Paths.ModsDirectory, source1.Name));
 			var realOutputPath = Path.Combine(Paths.ModsDirectory, mergedModName, relPath);
 
-			// Checked against the real would-be output path regardless of dryRun: a real
-			// run always declines to overwrite an existing output (HeadlessMergeNotifier's
-			// fixed default), so a dry run needs to predict that same "already exists,
-			// would be skipped" outcome rather than only ever reporting whether the text
-			// itself would auto-solve - otherwise a preview and the real run it's meant to
-			// predict could disagree on a conflict whose output already exists.
-			if (File.Exists(realOutputPath) && !ConfirmOutputOverwrite(realOutputPath))
+			// Checked against the real would-be output path regardless of dryRun, so a
+			// preview predicts the same outcome the real run it previews would hit.
+			// Without overwrite, an existing output is a clearly-reported skip (never a
+			// YesNo prompt: headless runs have no one to answer it, and
+			// HeadlessMergeNotifier's fixed non-destructive default made the old prompt
+			// an unconditional, near-silent "no" - the skip reason lived only in stderr
+			// prompt text, and headless/MCP callers could never refresh an existing
+			// merge at all; see docs/bugs/function-level-merge-gap-handling.md's
+			// "Related, lesser finding"). With overwrite, the existing output is
+			// refreshed - the semantic a mod manager re-merging after a mod update
+			// actually needs.
+			if (!overwrite && File.Exists(realOutputPath))
+			{
+				ReportOutputExistsSkip(conflict.RelativePath, realOutputPath);
 				return false;
+			}
 
 			// KDiff3 always physically writes its -o target on a successful solve - there's
 			// no "check without writing" mode - so a dry run still needs somewhere real to
@@ -646,17 +655,19 @@ namespace WitcherScriptMerger.Inventory
 			return names.Count > 1 ? "accumulated merge (" + string.Join(", ", names) + ")" : names[0];
 		}
 
-		bool MergeBundleConflictHeadless(ModFile conflict, Merge merge, string[] orderedNames, bool dryRun)
+		bool MergeBundleConflictHeadless(ModFile conflict, Merge merge, string[] orderedNames, bool dryRun, bool overwrite)
 		{
 			merge.BundleName = Path.GetFileName(Paths.RetrieveMergedBundlePath());
 
 			var realOutputPath = Path.Combine(Paths.MergedBundleContent, conflict.RelativePath);
 
-			// See the matching comment in MergeFlatConflictHeadless - same reasoning: check
-			// against the real would-be output regardless of dryRun, so a preview predicts
-			// the same "already exists, declined" outcome a real run would hit.
-			if (File.Exists(realOutputPath) && !ConfirmOutputOverwrite(realOutputPath))
+			// See the matching comment in MergeFlatConflictHeadless - same reasoning and
+			// same overwrite semantics.
+			if (!overwrite && File.Exists(realOutputPath))
+			{
+				ReportOutputExistsSkip(conflict.RelativePath, realOutputPath);
 				return false;
+			}
 
 			// Rooted under TempBundleContent instead of MergedBundleContent for a dry run so
 			// its intermediate merge text can never linger there either - see the matching
@@ -824,6 +835,13 @@ namespace WitcherScriptMerger.Inventory
 			}
 		}
 
+		// Interactive-path prompt (MergeFlatFileInteractive/MergeBundleFileInteractive)
+		// - a GUI user is present to actually answer it. The headless paths use
+		// ReportOutputExistsSkip below instead: under HeadlessMergeNotifier this
+		// prompt's fixed non-destructive default silently declined every overwrite,
+		// which meant headless/MCP merge_conflicts could never refresh an existing
+		// merge, with the reason buried in stderr prompt text (see docs/bugs/
+		// function-level-merge-gap-handling.md's "Related, lesser finding").
 		bool ConfirmOutputOverwrite(string outputPath)
 		{
 			return (NotifyResult.Yes == AppState.Notifier.ShowMessage(
@@ -831,6 +849,19 @@ namespace WitcherScriptMerger.Inventory
 				"Overwrite?",
 				NotifyButtons.YesNo,
 				DialogIcon.Exclamation));
+		}
+
+		// Headless-path counterpart to ConfirmOutputOverwrite: no prompt (there's no
+		// one to answer it) - states the skip and the way out. The overwrite
+		// parameter on MergeConflictsHeadless is what actually authorizes a refresh.
+		static void ReportOutputExistsSkip(string relativePath, string outputPath)
+		{
+			AppState.Notifier.ShowMessage(
+				"Skipped " + relativePath + ": merged output already exists.\n" + outputPath +
+				"\nPass --overwrite (CLI) or overwrite: true (MCP merge_conflicts) to refresh it.",
+				"Already Merged",
+				NotifyButtons.OK,
+				DialogIcon.Warning);
 		}
 
 		bool GetUnpackedFiles(string contentRelativePath, ref MergeSource source1, ref MergeSource source2)

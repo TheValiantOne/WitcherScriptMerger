@@ -237,3 +237,6 @@ HANDOFF*.md
 # Local build/packaging scratch + editor config
 dist-local/
 .vscode/
+
+# CDPR-derived bug-repro artifacts - never commit (third-party game content)
+docs/bugs/artifacts/

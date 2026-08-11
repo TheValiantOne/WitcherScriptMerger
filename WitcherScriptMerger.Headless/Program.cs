@@ -80,7 +80,7 @@ namespace WitcherScriptMerger.Headless
 			Console.Error.WriteLine("WitcherScriptMerger.Headless - CLI/MCP-only host (no GUI).");
 			Console.Error.WriteLine();
 			Console.Error.WriteLine("Usage:");
-			Console.Error.WriteLine("  WitcherScriptMerger.Headless merge [--order-file <path.json>]");
+			Console.Error.WriteLine("  WitcherScriptMerger.Headless merge [--order-file <path.json>] [--overwrite]");
 			Console.Error.WriteLine("  WitcherScriptMerger.Headless mcp");
 			Console.Error.WriteLine("  WitcherScriptMerger.Headless --version");
 			Console.Error.WriteLine();
@@ -117,10 +117,13 @@ namespace WitcherScriptMerger.Headless
 			}
 
 			string orderFilePath = null;
+			var overwrite = false;
 			for (int i = 1; i < args.Length; ++i)
 			{
 				if (args[i] == "--order-file" && i + 1 < args.Length)
 					orderFilePath = args[++i];
+				else if (args[i] == "--overwrite")
+					overwrite = true;
 				else
 				{
 					Console.Error.WriteLine($"Unknown argument: {args[i]}");
@@ -150,7 +153,7 @@ namespace WitcherScriptMerger.Headless
 				return 0;
 			}
 
-			var summary = MergeOperations.RunMerge(AppState.Inventory, modIndex.Conflicts, mergedModName, orderOverrides);
+			var summary = MergeOperations.RunMerge(AppState.Inventory, modIndex.Conflicts, mergedModName, orderOverrides, dryRun: false, overwrite: overwrite);
 
 			AppState.Inventory.Save();
 
