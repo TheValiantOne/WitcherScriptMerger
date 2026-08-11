@@ -23,7 +23,7 @@ export const DEFAULT_WSM_REPO = 'TheValiantOne/WitcherScriptMerger';
  * (`v<version>`) and `WitcherScriptMerger.Headless.csproj`'s own `<Version>`; bump it
  * alongside a new WSM release once that release's assets are published.
  */
-export const DEFAULT_WSM_VERSION = '0.6.2';
+export const DEFAULT_WSM_VERSION = '0.6.3';
 
 /**
  * Windows-only for now, matching Vortex itself being Windows-only today (see
