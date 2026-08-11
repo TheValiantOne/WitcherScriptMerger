@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // `vi.mock` factories are hoisted above imports, so anything they reference has to come
 // from `vi.hoisted` rather than an ordinary outer-scope `const` - this isolates index.ts's
@@ -12,6 +12,7 @@ const {
   scanWsmConflictsMock,
   notifyConflictsIfChangedMock,
   isModOrDependencyInstallActiveMock,
+  refreshCoexistenceStateMock,
 } = vi.hoisted(() => ({
   ensureWsmToolRegisteredMock: vi.fn(),
   registerWsmStatusDashletMock: vi.fn(),
@@ -19,6 +20,7 @@ const {
   scanWsmConflictsMock: vi.fn(),
   notifyConflictsIfChangedMock: vi.fn(),
   isModOrDependencyInstallActiveMock: vi.fn(),
+  refreshCoexistenceStateMock: vi.fn(),
 }));
 
 vi.mock('./toolAcquisition', () => ({
@@ -40,6 +42,17 @@ vi.mock('./conflictScan', () => ({
 vi.mock('./conflictNotifications', () => ({
   notifyConflictsIfChanged: notifyConflictsIfChangedMock,
   isModOrDependencyInstallActive: isModOrDependencyInstallActiveMock,
+}));
+
+// Unit K: isolates index.ts's own wiring from coexistenceGuard.ts's real behavior (its
+// own snapshot/compare/notify logic is covered directly by coexistenceGuard.test.ts
+// instead) - matches every mock above's own rationale. Without this, refreshCoexistenceState
+// would run for real against the *mocked* './conflictScan' module above (which doesn't
+// export getWsmExePath), silently failing inside its own try/catch on every did-deploy
+// test where isWsmToolAcquiredMock resolves true - technically harmless (it never throws
+// out to the caller) but untested and liable to mask a real regression.
+vi.mock('./coexistenceGuard', () => ({
+  refreshCoexistenceState: refreshCoexistenceStateMock,
 }));
 
 import main from './index';
@@ -68,7 +81,11 @@ import { WITCHER3_GAME_ID } from './gating';
 function fakeContext(initialActiveGameId: string | undefined, profiles: Record<string, { gameId: string }> = {}) {
   const state = { activeGameId: initialActiveGameId, profiles };
   let onceCallback: (() => void) | undefined;
-  const eventListeners = new Map<string, Array<() => void>>();
+  // Args-capable (not just `() => void`) since Unit K's 'profile-did-change' listener
+  // takes a `profileId: string` argument - `did-deploy`'s own async equivalent already
+  // needed args support (see `fireAsyncEvent` below), this just extends the same
+  // capability to plain `events.on` listeners.
+  const eventListeners = new Map<string, Array<(...args: unknown[]) => void>>();
   const asyncListeners = new Map<string, (...args: unknown[]) => Promise<unknown>>();
   const registerActionMock = vi.fn();
 
@@ -84,7 +101,7 @@ function fakeContext(initialActiveGameId: string | undefined, profiles: Record<s
     api: {
       getState: () => state,
       events: {
-        on: (eventName: string, listener: () => void) => {
+        on: (eventName: string, listener: (...args: unknown[]) => void) => {
           const listeners = eventListeners.get(eventName) ?? [];
           listeners.push(listener);
           eventListeners.set(eventName, listeners);
@@ -99,7 +116,7 @@ function fakeContext(initialActiveGameId: string | undefined, profiles: Record<s
   return {
     context: context as unknown as Parameters<typeof main>[0],
     fireOnce: () => onceCallback?.(),
-    fireEvent: (eventName: string) => eventListeners.get(eventName)?.forEach((listener) => listener()),
+    fireEvent: (eventName: string, ...args: unknown[]) => eventListeners.get(eventName)?.forEach((listener) => listener(...args)),
     fireAsyncEvent: (eventName: string, ...args: unknown[]) => asyncListeners.get(eventName)?.(...args),
     setActiveGame: (gameId: string | undefined) => {
       state.activeGameId = gameId;
@@ -109,6 +126,23 @@ function fakeContext(initialActiveGameId: string | undefined, profiles: Record<s
 }
 
 describe('main (index.ts)', () => {
+  // Unit K: refreshCoexistenceState is now called unconditionally, from THREE different
+  // call sites, whenever witcher3 is the relevant game (tryRegisterWsmTool - both at
+  // fireOnce() time and on every 'gamemode-activated' - plus checkForConflictsAfterDeploy
+  // and checkCoexistenceOnProfileChange). A safe resolved-value default here (rather than
+  // requiring every single test that happens to exercise a witcher3-active path to
+  // remember to configure it) avoids a whole class of "Cannot read properties of
+  // undefined (reading 'catch')" crashes an unconfigured vi.fn() would otherwise cause the
+  // moment this file's own .catch(...) call sites run against it - caught in code review
+  // when the gamemode-activated wiring was added and several previously-passing tests
+  // started crashing. Individual tests below still override this via their own
+  // .mockClear()/.mockReset() calls where they need to assert something more specific
+  // (an exact call count, a rejection, etc.) - this is only the baseline every other test
+  // can rely on without thinking about it.
+  beforeEach(() => {
+    refreshCoexistenceStateMock.mockReset().mockResolvedValue(undefined);
+  });
+
   it('returns true (Vortex extension init contract)', () => {
     const { context } = fakeContext(undefined);
     expect(main(context)).toBe(true);
@@ -149,6 +183,37 @@ describe('main (index.ts)', () => {
     fireEvent('gamemode-activated');
 
     expect(ensureWsmToolRegisteredMock).toHaveBeenCalledTimes(1);
+  });
+
+  // Unit K: this test exists specifically because a prior version of this file's own
+  // header comment (and coexistenceGuard.ts's own) documented 'gamemode-activated' as a
+  // wired coexistence-check trigger point without tryRegisterWsmTool actually calling
+  // refreshCoexistenceState at all - caught in code review, not by any test, since
+  // nothing had asserted on this call site before. This test is what would have caught
+  // that regression, and is what should catch it again if this wiring is ever dropped.
+  it('calls refreshCoexistenceState (the third trigger point) whenever tryRegisterWsmTool runs with witcher3 active - both at context.once time and on a live gamemode-activated switch', () => {
+    const { context, fireOnce, fireEvent, setActiveGame } = fakeContext(WITCHER3_GAME_ID);
+
+    main(context);
+    fireOnce();
+    expect(refreshCoexistenceStateMock).toHaveBeenCalledTimes(1);
+    expect(refreshCoexistenceStateMock).toHaveBeenCalledWith(context.api);
+
+    setActiveGame('skyrimse');
+    fireEvent('gamemode-activated');
+    expect(refreshCoexistenceStateMock).toHaveBeenCalledTimes(1); // still not witcher3 - no new call
+
+    setActiveGame(WITCHER3_GAME_ID);
+    fireEvent('gamemode-activated');
+    expect(refreshCoexistenceStateMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not throw when refreshCoexistenceState rejects from tryRegisterWsmTool', () => {
+    refreshCoexistenceStateMock.mockReset().mockRejectedValue(new Error('coexistence check failed'));
+    const { context, fireOnce } = fakeContext(WITCHER3_GAME_ID);
+
+    main(context);
+    expect(() => fireOnce()).not.toThrow();
   });
 
   it('does nothing on "gamemode-activated" when the newly-active game still is not witcher3', () => {
@@ -278,6 +343,7 @@ describe('main (index.ts)', () => {
       ensureWsmToolRegisteredMock.mockClear().mockResolvedValue(false);
       isWsmToolAcquiredMock.mockClear().mockResolvedValue(true);
       isModOrDependencyInstallActiveMock.mockClear().mockReturnValue(false);
+      refreshCoexistenceStateMock.mockClear().mockResolvedValue(undefined);
       const conflicts = [{ relativePath: 'a.ws' }];
       scanWsmConflictsMock.mockClear().mockResolvedValue(conflicts);
       notifyConflictsIfChangedMock.mockClear();
@@ -297,6 +363,7 @@ describe('main (index.ts)', () => {
     it('skips scanning (without throwing) when no WSM tool has been acquired yet', async () => {
       ensureWsmToolRegisteredMock.mockClear().mockResolvedValue(false);
       isWsmToolAcquiredMock.mockClear().mockResolvedValue(false);
+      refreshCoexistenceStateMock.mockClear();
       scanWsmConflictsMock.mockClear();
       notifyConflictsIfChangedMock.mockClear();
       const { context, fireOnce, fireAsyncEvent } = fakeContext(WITCHER3_GAME_ID, {
@@ -316,6 +383,7 @@ describe('main (index.ts)', () => {
       ensureWsmToolRegisteredMock.mockClear().mockResolvedValue(false);
       isWsmToolAcquiredMock.mockClear().mockResolvedValue(true);
       isModOrDependencyInstallActiveMock.mockClear().mockReturnValue(false);
+      refreshCoexistenceStateMock.mockClear().mockResolvedValue(undefined);
       const conflicts = [{ relativePath: 'a.ws' }];
       scanWsmConflictsMock.mockClear().mockResolvedValue(conflicts);
       notifyConflictsIfChangedMock.mockClear();
@@ -354,10 +422,123 @@ describe('main (index.ts)', () => {
       expect(notifyConflictsIfChangedMock).not.toHaveBeenCalled();
     });
 
+    // Unit K's own headline regression: refreshCoexistenceState must run even while a
+    // mod/dependency install is in progress (e.g. installing a Collection), because
+    // that's precisely the window in which game-witcher3's own importScriptMerges() can
+    // overwrite this extension's merge output (coexistenceGuard.ts's own doc comment,
+    // hazard 1). A coexistence check gated behind the same isModOrDependencyInstallActive
+    // early-return that (correctly) skips *conflict scanning* here would never see the
+    // one did-deploy where that overwrite actually happened.
+    it('still calls refreshCoexistenceState even while a mod/dependency install is in progress', async () => {
+      ensureWsmToolRegisteredMock.mockClear().mockResolvedValue(false);
+      isWsmToolAcquiredMock.mockClear().mockResolvedValue(true);
+      isModOrDependencyInstallActiveMock.mockClear().mockReturnValue(true);
+      scanWsmConflictsMock.mockClear();
+      const { context, fireOnce, fireAsyncEvent } = fakeContext(WITCHER3_GAME_ID, {
+        profile1: { gameId: WITCHER3_GAME_ID },
+      });
+
+      main(context);
+      fireOnce();
+      // fireOnce() itself already triggered one refreshCoexistenceState call via
+      // tryRegisterWsmTool (witcher3 is this test's own initial active game) - cleared
+      // here so the assertion below isolates did-deploy's own, separate call to it,
+      // which is what this test actually exists to prove.
+      refreshCoexistenceStateMock.mockClear();
+      await fireAsyncEvent('did-deploy', 'profile1', undefined);
+
+      expect(refreshCoexistenceStateMock).toHaveBeenCalledTimes(1);
+      expect(refreshCoexistenceStateMock).toHaveBeenCalledWith(context.api);
+      // Still correctly skips the unrelated conflict scan itself.
+      expect(scanWsmConflictsMock).not.toHaveBeenCalled();
+    });
+
+    it('calls refreshCoexistenceState for an ordinary witcher3 deployment too', async () => {
+      ensureWsmToolRegisteredMock.mockClear().mockResolvedValue(false);
+      isWsmToolAcquiredMock.mockClear().mockResolvedValue(true);
+      isModOrDependencyInstallActiveMock.mockClear().mockReturnValue(false);
+      scanWsmConflictsMock.mockClear().mockResolvedValue([]);
+      notifyConflictsIfChangedMock.mockClear();
+      const { context, fireOnce, fireAsyncEvent } = fakeContext(WITCHER3_GAME_ID, {
+        profile1: { gameId: WITCHER3_GAME_ID },
+      });
+
+      main(context);
+      fireOnce();
+      refreshCoexistenceStateMock.mockClear(); // see comment in the test just above
+      await fireAsyncEvent('did-deploy', 'profile1', undefined);
+
+      expect(refreshCoexistenceStateMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not call refreshCoexistenceState when no WSM tool has been acquired yet', async () => {
+      ensureWsmToolRegisteredMock.mockClear().mockResolvedValue(false);
+      isWsmToolAcquiredMock.mockClear().mockResolvedValue(false);
+      const { context, fireOnce, fireAsyncEvent } = fakeContext(WITCHER3_GAME_ID, {
+        profile1: { gameId: WITCHER3_GAME_ID },
+      });
+
+      main(context);
+      fireOnce();
+      refreshCoexistenceStateMock.mockClear(); // see comment two tests above
+      await fireAsyncEvent('did-deploy', 'profile1', undefined);
+
+      expect(refreshCoexistenceStateMock).not.toHaveBeenCalled();
+    });
+
+    it('does not call refreshCoexistenceState for a non-witcher3 deployment', async () => {
+      ensureWsmToolRegisteredMock.mockClear().mockResolvedValue(false);
+      isWsmToolAcquiredMock.mockClear();
+      const { context, fireOnce, fireAsyncEvent } = fakeContext(WITCHER3_GAME_ID, {
+        profile1: { gameId: 'skyrimse' },
+      });
+
+      main(context);
+      fireOnce();
+      refreshCoexistenceStateMock.mockClear(); // see comment three tests above
+      await fireAsyncEvent('did-deploy', 'profile1', undefined);
+
+      expect(refreshCoexistenceStateMock).not.toHaveBeenCalled();
+    });
+
+    // Corrected in code review: an earlier version of this test's own title claimed the
+    // conflict scan still runs when refreshCoexistenceState rejects, while its own
+    // neighboring comment said the opposite - and neither was actually verified by an
+    // assertion, so the mismatch went unnoticed. The real, correct behavior (per
+    // checkForConflictsAfterDeploy's single shared try/catch wrapping the whole handler
+    // body) is that a refreshCoexistenceState rejection aborts the rest of *this specific*
+    // handler invocation, matching the existing, established precedent for every other
+    // unexpected throw in this same handler (see the isWsmToolAcquired-throws-EBUSY test
+    // below) - not a special case for this one call. refreshCoexistenceState is
+    // documented (coexistenceGuard.ts's own doc comment) to never actually reject in
+    // production; this test exists to prove the handler stays robust (never rejects
+    // onAsync's own promise) even if that contract were ever violated, not to claim the
+    // scan proceeds regardless.
+    it('resolves (never rejects) when refreshCoexistenceState itself rejects, and correctly skips the rest of this handler invocation (matching every other unexpected-throw case in this same handler)', async () => {
+      ensureWsmToolRegisteredMock.mockClear().mockResolvedValue(false);
+      isWsmToolAcquiredMock.mockClear().mockResolvedValue(true);
+      isModOrDependencyInstallActiveMock.mockClear().mockReturnValue(false);
+      refreshCoexistenceStateMock.mockClear().mockRejectedValue(new Error('coexistence check failed'));
+      const conflicts = [{ relativePath: 'a.ws' }];
+      scanWsmConflictsMock.mockClear().mockResolvedValue(conflicts);
+      notifyConflictsIfChangedMock.mockClear();
+      const { context, fireOnce, fireAsyncEvent } = fakeContext(WITCHER3_GAME_ID, {
+        profile1: { gameId: WITCHER3_GAME_ID },
+      });
+
+      main(context);
+      fireOnce();
+
+      await expect(fireAsyncEvent('did-deploy', 'profile1', undefined)).resolves.toBeUndefined();
+      expect(scanWsmConflictsMock).not.toHaveBeenCalled();
+      expect(notifyConflictsIfChangedMock).not.toHaveBeenCalled();
+    });
+
     it('resolves (never rejects) when scanWsmConflicts throws - onAsync listeners must report their own errors', async () => {
       ensureWsmToolRegisteredMock.mockClear().mockResolvedValue(false);
       isWsmToolAcquiredMock.mockClear().mockResolvedValue(true);
       isModOrDependencyInstallActiveMock.mockClear().mockReturnValue(false);
+      refreshCoexistenceStateMock.mockClear().mockResolvedValue(undefined);
       scanWsmConflictsMock.mockClear().mockRejectedValue(new Error('spawn failed'));
       notifyConflictsIfChangedMock.mockClear();
       const { context, fireOnce, fireAsyncEvent } = fakeContext(WITCHER3_GAME_ID, {
@@ -423,6 +604,94 @@ describe('main (index.ts)', () => {
       await expect(fireAsyncEvent('did-deploy', 'profile1', undefined)).resolves.toBeUndefined();
       expect(isWsmToolAcquiredMock).not.toHaveBeenCalled();
       expect(scanWsmConflictsMock).not.toHaveBeenCalled();
+    });
+  });
+
+  // Unit K: the second coexistence-check trigger point, alongside did-deploy above -
+  // see coexistenceGuard.ts's own header comment for why profile-will-change itself is
+  // deliberately not used and profile-did-change is used instead.
+  describe('profile-did-change coexistence check', () => {
+    it('registers a profile-did-change handler via events.on (not onAsync) at context.once time', () => {
+      const { context, fireOnce, fireEvent } = fakeContext(undefined);
+
+      main(context);
+      fireOnce();
+
+      // Must not throw - proves a listener really is registered for this event name,
+      // not silently falling through to a no-op (fireEvent no-ops on an unknown event
+      // name too, so this alone wouldn't distinguish "registered" from "not registered"
+      // without the refreshCoexistenceStateMock assertions in the tests below).
+      expect(() => fireEvent('profile-did-change', 'profile1')).not.toThrow();
+    });
+
+    it('calls refreshCoexistenceState when the switched-to profile is witcher3', () => {
+      refreshCoexistenceStateMock.mockClear().mockResolvedValue(undefined);
+      const { context, fireOnce, fireEvent } = fakeContext(undefined, {
+        profile1: { gameId: WITCHER3_GAME_ID },
+      });
+
+      main(context);
+      fireOnce();
+      fireEvent('profile-did-change', 'profile1');
+
+      expect(refreshCoexistenceStateMock).toHaveBeenCalledTimes(1);
+      expect(refreshCoexistenceStateMock).toHaveBeenCalledWith(context.api);
+    });
+
+    it('does not call refreshCoexistenceState when the switched-to profile is a different game', () => {
+      refreshCoexistenceStateMock.mockClear();
+      const { context, fireOnce, fireEvent } = fakeContext(undefined, {
+        profile1: { gameId: 'skyrimse' },
+      });
+
+      main(context);
+      fireOnce();
+      fireEvent('profile-did-change', 'profile1');
+
+      expect(refreshCoexistenceStateMock).not.toHaveBeenCalled();
+    });
+
+    it('does not call refreshCoexistenceState when the profileId is unknown (no matching profile at all)', () => {
+      refreshCoexistenceStateMock.mockClear();
+      const { context, fireOnce, fireEvent } = fakeContext(undefined, {});
+
+      main(context);
+      fireOnce();
+      fireEvent('profile-did-change', 'unknown-profile');
+
+      expect(refreshCoexistenceStateMock).not.toHaveBeenCalled();
+    });
+
+    it('does not throw (a plain events.on listener rejecting is an unhandled rejection in Vortex\'s own process) when refreshCoexistenceState rejects', async () => {
+      refreshCoexistenceStateMock.mockClear().mockRejectedValue(new Error('coexistence check failed'));
+      const { context, fireOnce, fireEvent } = fakeContext(undefined, {
+        profile1: { gameId: WITCHER3_GAME_ID },
+      });
+
+      main(context);
+      fireOnce();
+
+      expect(() => fireEvent('profile-did-change', 'profile1')).not.toThrow();
+      // Let the rejected promise's own .catch() handler actually run before the test
+      // ends, matching the existing "does not throw when ensureWsmToolRegistered
+      // rejects" test's own pattern above.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    it('does not throw when reading state for the profile gate throws synchronously', () => {
+      refreshCoexistenceStateMock.mockClear();
+      const { context, fireOnce, fireEvent } = fakeContext(undefined, {
+        profile1: { gameId: WITCHER3_GAME_ID },
+      });
+
+      main(context);
+      fireOnce();
+      context.api.getState = () => {
+        throw new Error('state store unavailable');
+      };
+
+      expect(() => fireEvent('profile-did-change', 'profile1')).not.toThrow();
+      expect(refreshCoexistenceStateMock).not.toHaveBeenCalled();
     });
   });
 });

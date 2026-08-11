@@ -1,4 +1,5 @@
 import { log, selectors, types } from 'vortex-api';
+import { refreshCoexistenceState } from './coexistenceGuard';
 import { isWsmToolAcquired, scanWsmConflicts } from './conflictScan';
 import { isModOrDependencyInstallActive, notifyConflictsIfChanged } from './conflictNotifications';
 import { isWitcher3Active, WITCHER3_GAME_ID } from './gating';
@@ -85,6 +86,18 @@ import { ensureWsmToolRegistered } from './toolAcquisition';
  * This extension must never call `context.registerGame('witcher3', ...)` - Vortex's own
  * built-in `game-witcher3` extension already owns that registration; this extension is a
  * companion to it, not a replacement.
+ *
+ * Unit K (coexistence & Collections handling) adds no new `context.register*` call - see
+ * `coexistenceGuard.ts`'s own header doc comment for the full detect/warn/reconcile
+ * design and its citations. It adds two things to what's registered above: a new
+ * `context.api.events.on('profile-did-change', ...)` listener (plain `events.on`, not
+ * `onAsync` - matches `EVENTS.md`'s own "Profile has been switched" entry, which is not
+ * marked "Async." the way `did-deploy` is), registered inside `context.once` alongside
+ * `tryRegisterWsmTool`'s own `gamemode-activated` listener; and a call to
+ * `refreshCoexistenceState` from inside `checkForConflictsAfterDeploy`, deliberately
+ * placed *above* that function's own `isModOrDependencyInstallActive` early-return - see
+ * that call site's own comment for why installing a Collection is exactly the case this
+ * ordering exists to still catch.
  */
 function main(context: types.IExtensionContext): boolean {
   // Unit J: the dependency/status dashlet. Called here, synchronously and
@@ -120,6 +133,21 @@ function main(context: types.IExtensionContext): boolean {
           error: err instanceof Error ? err.message : String(err),
         });
       });
+
+    // Unit K: the third coexistence-check trigger point (alongside profile-did-change and
+    // did-deploy, both further below) - catches drift that accumulated while a different
+    // game was active, or while Vortex itself was closed, neither of which either of the
+    // other two triggers would ever see. Fixed in code review: an earlier version of this
+    // file's own header comment (and coexistenceGuard.ts's own) documented
+    // 'gamemode-activated' as a wired trigger point without this call actually existing -
+    // a real doc/code mismatch, not just stale prose. refreshCoexistenceState never throws
+    // (its own internal try/catch) - this .catch is belt-and-suspenders only, same
+    // reasoning as the .catch immediately above.
+    refreshCoexistenceState(context.api).catch((err: unknown) => {
+      log('warn', 'witcherscriptmerger-vortex: gamemode-activated coexistence check failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
   }
 
   // onAsync's own contract (@nexusmods/vortex-api's lib/api.d.ts doc comment on
@@ -172,6 +200,18 @@ function main(context: types.IExtensionContext): boolean {
         return;
       }
 
+      // Unit K (coexistence & Collections handling): deliberately called *before* the
+      // isModOrDependencyInstallActive gate just below, not after it. That gate exists to
+      // skip *conflict scanning* during a mod/dependency-install burst (see its own doc
+      // comment) - but installing a Vortex Collection that bundles script merges is
+      // exactly the window in which game-witcher3's own importScriptMerges() can silently
+      // overwrite this extension's merge output (coexistenceGuard.ts's own header comment,
+      // hazard 1). A coexistence check gated behind the same early-return would never see
+      // the one did-deploy where that overwrite actually happened. refreshCoexistenceState
+      // never throws (own try/catch) and is a purely best-effort secondary signal, so it
+      // can't affect what follows either way.
+      await refreshCoexistenceState(context.api);
+
       if (isModOrDependencyInstallActive(context.api)) {
         // Purely an optimization, not a correctness requirement - notifyConflictsIfChanged
         // (conflictNotifications.ts) checks this same condition again on whatever result
@@ -195,6 +235,42 @@ function main(context: types.IExtensionContext): boolean {
     }
   }
 
+  // Unit K (coexistence & Collections handling): the `profile-did-change` trigger point -
+  // see coexistenceGuard.ts's own header comment for why `profile-will-change` itself is
+  // deliberately not used instead (a plain, synchronous events.on emit whose listeners
+  // Vortex never awaits, so there's no reliable way to bracket the built-in extension's
+  // own file moves around it). Gated like checkForConflictsAfterDeploy gates did-deploy:
+  // resolves the *switched-to* profile's own gameId via selectors.profileById rather than
+  // isWitcher3Active(context.api) - by the time profile-did-change fires the active game
+  // already is the new profile's game, so the two would normally agree, but resolving it
+  // from the event's own profileId keeps this consistent with that existing reasoning
+  // rather than assuming it.
+  function checkCoexistenceOnProfileChange(profileId: string): void {
+    let gameId: string | undefined;
+    try {
+      gameId = selectors.profileById(context.api.getState(), profileId)?.gameId;
+    } catch (err) {
+      log('warn', 'witcherscriptmerger-vortex: profile-did-change coexistence check failed to read state', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+
+    if (gameId !== WITCHER3_GAME_ID) {
+      return;
+    }
+
+    // refreshCoexistenceState never throws (its own internal try/catch) - this .catch is
+    // belt-and-suspenders only, matching tryRegisterWsmTool's own reasoning just above:
+    // a plain events.on listener that returns a rejected promise becomes an unhandled
+    // rejection in Vortex's own process rather than a contained extension failure.
+    refreshCoexistenceState(context.api).catch((err: unknown) => {
+      log('warn', 'witcherscriptmerger-vortex: profile-did-change coexistence check failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+  }
+
   // Registered synchronously here, not inside context.once below - see
   // mergeHistoryDashlet.ts's own registerMergeHistoryDashlet doc comment for why a
   // register call specifically must not be deferred into once, unlike
@@ -204,6 +280,7 @@ function main(context: types.IExtensionContext): boolean {
   context.once(() => {
     tryRegisterWsmTool();
     context.api.events.on('gamemode-activated', tryRegisterWsmTool);
+    context.api.events.on('profile-did-change', checkCoexistenceOnProfileChange);
     context.api.onAsync('did-deploy', checkForConflictsAfterDeploy);
   });
 

@@ -1,8 +1,28 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { WITCHER3_GAME_ID } from './gating';
 import { WSM_TOOL_ID } from './discoveredTool';
-import { MergeConflictsResult, WsmMcpClientOptions } from './mcpClient';
+import { GetStatusResult, MergeConflictsResult, WsmMcpClientOptions } from './mcpClient';
 import { resolveScriptConflicts, WsmMergeClient } from './resolveAction';
+
+// Unit K: isolates resolveAction.ts's own logic from coexistenceGuard.ts's real
+// behavior (its own snapshot/compare logic is covered directly by
+// coexistenceGuard.test.ts instead) - same rationale as every other sibling-module mock
+// in this codebase (e.g. index.test.ts's own mocks). Without this, the real
+// computeMergeStateSnapshot would call the fake client's own getStatus/listMerges below
+// and attempt a real recursive fs walk against whatever `status.modsDirectory` those
+// stubs return - harmless in practice (an ENOENT-tolerant walk against a nonsense path)
+// but untested and not this file's concern.
+const { computeMergeStateSnapshotMock, recordOwnMergeStateSnapshotMock, checkCoexistenceDriftMock } = vi.hoisted(() => ({
+  computeMergeStateSnapshotMock: vi.fn(),
+  recordOwnMergeStateSnapshotMock: vi.fn(),
+  checkCoexistenceDriftMock: vi.fn(),
+}));
+
+vi.mock('./coexistenceGuard', () => ({
+  computeMergeStateSnapshot: computeMergeStateSnapshotMock,
+  recordOwnMergeStateSnapshot: recordOwnMergeStateSnapshotMock,
+  checkCoexistenceDrift: checkCoexistenceDriftMock,
+}));
 
 function mergeResult(overrides: Partial<MergeConflictsResult> = {}): MergeConflictsResult {
   return {
@@ -73,10 +93,27 @@ function fakeApi(options: {
   };
 }
 
+function fakeStatus(overrides: Partial<GetStatusResult> = {}): GetStatusResult {
+  return {
+    gameDirectory: 'C:\\Games\\Witcher3',
+    modsDirectory: 'C:\\Games\\Witcher3\\Mods',
+    dependenciesValid: true,
+    textMergeDependenciesValid: true,
+    bundleDependenciesValid: true,
+    modsDirectoryExists: true,
+    mergedModName: 'mod0000_MergedFiles',
+    conflictCount: 0,
+    ...overrides,
+  };
+}
+
 /** A fake `connect` - returns queued results/errors in call order and records every
  *  `exePath`/`env` it was called with, plus how many of the clients it produced were
  *  closed - proves `resolveScriptConflicts` closes every client it opens, even on the
- *  error path (via `finally`). */
+ *  error path (via `finally`). `getStatus`/`listMerges` are trivial stubs, never
+ *  meaningfully exercised here since `./coexistenceGuard` (the only thing that would
+ *  call them, via `computeMergeStateSnapshot`) is mocked above - they exist only to
+ *  satisfy `WsmMergeClient`'s type. */
 function fakeConnect(outcomes: Array<{ result?: MergeConflictsResult; error?: Error }>) {
   const calls: WsmMcpClientOptions[] = [];
   let closedCount = 0;
@@ -92,6 +129,8 @@ function fakeConnect(outcomes: Array<{ result?: MergeConflictsResult; error?: Er
         }
         return outcome.result!;
       },
+      getStatus: async () => fakeStatus(),
+      listMerges: async () => [],
       close: async () => {
         closedCount += 1;
       },
@@ -102,6 +141,16 @@ function fakeConnect(outcomes: Array<{ result?: MergeConflictsResult; error?: Er
 }
 
 describe('resolveScriptConflicts', () => {
+  beforeEach(() => {
+    computeMergeStateSnapshotMock.mockReset().mockResolvedValue({
+      folderListingSignature: '',
+      mergeHistorySignature: '',
+      mergedModName: 'mod0000_MergedFiles',
+    });
+    recordOwnMergeStateSnapshotMock.mockReset();
+    checkCoexistenceDriftMock.mockReset();
+  });
+
   it('shows an error notification and never connects when no WSM tool has been registered', async () => {
     const { api, notifications, showDialogCalls } = fakeApi({});
     const { connect } = fakeConnect([]);
@@ -169,6 +218,65 @@ describe('resolveScriptConflicts', () => {
     // final.skipped is empty, so the result dialog should read as a success, not a
     // "some files still need attention" info dialog.
     expect(showDialogCalls[1].type).toBe('success');
+  });
+
+  // Unit K: reconciles coexistenceGuard.ts's own "last known merge state" against this
+  // extension's own just-completed workflow, using the same still-open client each time -
+  // see resolveAction.ts's own comment in runMergeConflictsWorkflow for why the preview
+  // and the real merge deliberately go through *different* coexistenceGuard.ts functions
+  // (checkCoexistenceDrift for the no-write preview vs. the silent
+  // recordOwnMergeStateSnapshot for the real, writing merge), not the same one for both.
+  it('checks for coexistence drift (does not silently re-baseline) after the dry-run preview, and silently re-baselines only after the real merge', async () => {
+    const { api } = fakeApi({
+      toolPath: 'C:\\wsm\\WitcherScriptMerger.Headless.exe',
+      dialogResponses: [{ action: 'Merge Now' }],
+    });
+    const preview = mergeResult({ merged: ['a.ws'], skipped: ['b.xml'] });
+    const final = mergeResult({ merged: ['a.ws'], skipped: [], dryRun: false });
+    const { connect } = fakeConnect([{ result: preview }, { result: final }]);
+    const previewSnapshot = { folderListingSignature: 'sig1', mergeHistorySignature: 'sig2', mergedModName: 'mod0000_MergedFiles' };
+    const finalSnapshot = { folderListingSignature: 'sig3', mergeHistorySignature: 'sig4', mergedModName: 'mod0000_MergedFiles' };
+    computeMergeStateSnapshotMock.mockReset().mockResolvedValueOnce(previewSnapshot).mockResolvedValueOnce(finalSnapshot);
+
+    await resolveScriptConflicts(api, { connect });
+
+    // Once per connected client (preview, then the real merge) - each call receives
+    // whichever client instance was open at that point, per computeMergeStateSnapshot's
+    // own "already-open client" contract.
+    expect(computeMergeStateSnapshotMock).toHaveBeenCalledTimes(2);
+
+    // Preview (dryRun: true, no write performed) - compared against the existing
+    // baseline, never silently adopted as the new one. A regression here (an earlier
+    // version of this code unconditionally called recordOwnMergeStateSnapshot for both
+    // calls) would let a preview-then-cancel workflow silently erase evidence of real,
+    // undetected drift with no notification ever shown - caught in code review.
+    expect(checkCoexistenceDriftMock).toHaveBeenCalledTimes(1);
+    expect(checkCoexistenceDriftMock).toHaveBeenCalledWith(api, previewSnapshot);
+    expect(recordOwnMergeStateSnapshotMock).not.toHaveBeenCalledWith(previewSnapshot);
+
+    // Real merge (dryRun: false) - this extension's own write, silently adopted as the
+    // new known-good baseline, no comparison/notification.
+    expect(recordOwnMergeStateSnapshotMock).toHaveBeenCalledTimes(1);
+    expect(recordOwnMergeStateSnapshotMock).toHaveBeenCalledWith(finalSnapshot);
+    expect(checkCoexistenceDriftMock).not.toHaveBeenCalledWith(api, finalSnapshot);
+  });
+
+  it('does not let a coexistence-guard snapshot failure affect the merge result the user sees', async () => {
+    const { api, showDialogCalls } = fakeApi({
+      toolPath: 'C:\\wsm\\WitcherScriptMerger.Headless.exe',
+      dialogResponses: [{ action: 'Merge Now' }],
+    });
+    const preview = mergeResult({ merged: ['a.ws'], skipped: [] });
+    const final = mergeResult({ merged: ['a.ws'], skipped: [], dryRun: false });
+    const { connect } = fakeConnect([{ result: preview }, { result: final }]);
+    computeMergeStateSnapshotMock.mockReset().mockRejectedValue(new Error('snapshot failed'));
+
+    await resolveScriptConflicts(api, { connect });
+
+    expect(showDialogCalls).toHaveLength(2);
+    expect(showDialogCalls[1].type).toBe('success');
+    expect(recordOwnMergeStateSnapshotMock).not.toHaveBeenCalled();
+    expect(checkCoexistenceDriftMock).not.toHaveBeenCalled();
   });
 
   it('shows an "info" (not "success") result dialog when the real merge still leaves skipped files', async () => {
