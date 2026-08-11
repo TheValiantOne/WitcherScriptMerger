@@ -214,6 +214,16 @@ jobs:
           ( cd publish/WitcherScriptMerger.Headless-win-x64 && zip -r "../../dist/WitcherScriptMerger.Headless-${RELEASE_VERSION}-win-x64.zip" . )
           ( cd publish/WitcherScriptMerger.Headless-linux-x64 && tar -czf "../../dist/WitcherScriptMerger.Headless-${RELEASE_VERSION}-linux-x64.tar.gz" . )
 
+      # --repo is required here: this job never checks out the repo (it only downloads
+      # build artifacts from earlier jobs), so gh has no local git context to
+      # auto-detect the target repository from - confirmed by the first real run of
+      # this workflow (tag v0.6.2) failing with "failed to run git: fatal: not a git
+      # repository (or any of the parent directories): .git" on exactly this step.
+      # $GITHUB_REPOSITORY (a built-in Actions env var, "owner/repo") sidesteps that
+      # without needing an actions/checkout step just for this. Same class of mistake
+      # this repo's own CLAUDE.md already warns about for `gh pr create` run without
+      # --repo/--base - explicit is required, not optional, for any `gh` invocation
+      # that can't infer its target from a real git working directory.
       - name: Create GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -224,5 +234,6 @@ jobs:
             "dist/WitcherScriptMerger-${RELEASE_VERSION}-win-x64.zip" \
             "dist/WitcherScriptMerger.Headless-${RELEASE_VERSION}-win-x64.zip" \
             "dist/WitcherScriptMerger.Headless-${RELEASE_VERSION}-linux-x64.tar.gz" \
+            --repo "$GITHUB_REPOSITORY" \
             --title "$GITHUB_REF_NAME" \
             --generate-notes
