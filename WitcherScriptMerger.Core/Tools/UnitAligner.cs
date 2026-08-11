@@ -27,16 +27,18 @@ namespace WitcherScriptMerger.Tools
 		}
 	}
 
-	// Aligns one side's extracted units against vanilla's, by name, so
-	// FunctionLevelMergeEngine can tell - per vanilla function - whether each side kept
+	// Aligns one side's extracted units against vanilla's, by scoped name, so
+	// FunctionLevelMergeEngine can tell - per vanilla unit - whether each side kept
 	// it unchanged, edited it, or deleted it outright, and which units on each side are
-	// wholly new (not in vanilla at all). Confirmed empirically (this feature's own
-	// design research, against real vanilla actor.ws/player.ws/npc.ws) that function
-	// names don't collide within a file, so this is a longest-common-subsequence
-	// alignment on plain name tokens - standard LCS DP, not a heuristic - with no
-	// ambiguity from duplicate names to worry about in practice. A file that somehow did
-	// have duplicate names still produces *a* valid LCS, just not necessarily the one a
-	// human would consider "obviously correct" - a reasonable degradation, not a crash.
+	// wholly new (not in vanilla at all). Matching uses ScriptUnit.ScopedName
+	// ("CR4Player::mCSMCR"), not the bare Name: member-declaration names recur across
+	// the multiple classes a real .ws file contains (function names were measured not
+	// to collide, but member names like "owner" absolutely do), so bare-name identity
+	// would mis-align a member of one class against a same-named member of another.
+	// This is a longest-common-subsequence alignment on those scoped-name tokens -
+	// standard LCS DP, not a heuristic. A file that somehow did have duplicate scoped
+	// names still produces *a* valid LCS, just not necessarily the one a human would
+	// consider "obviously correct" - a reasonable degradation, not a crash.
 	public static class UnitAligner
 	{
 		public static UnitAlignment Align(IReadOnlyList<ScriptUnit> vanillaUnits, IReadOnlyList<ScriptUnit> sideUnits)
@@ -52,7 +54,7 @@ namespace WitcherScriptMerger.Tools
 			{
 				for (var j = m - 1; j >= 0; --j)
 				{
-					dp[i, j] = vanillaUnits[i].Name == sideUnits[j].Name
+					dp[i, j] = vanillaUnits[i].ScopedName == sideUnits[j].ScopedName
 						? dp[i + 1, j + 1] + 1
 						: Math.Max(dp[i + 1, j], dp[i, j + 1]);
 				}
@@ -71,7 +73,7 @@ namespace WitcherScriptMerger.Tools
 			var si = 0;
 			while (vi < n && si < m)
 			{
-				if (vanillaUnits[vi].Name == sideUnits[si].Name)
+				if (vanillaUnits[vi].ScopedName == sideUnits[si].ScopedName)
 				{
 					matched[vi] = si;
 					++vi;

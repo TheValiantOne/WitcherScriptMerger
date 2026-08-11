@@ -9,31 +9,56 @@ namespace WitcherScriptMerger.Tools
 	{
 		Function,
 		Field,
+		// A plain (non-@addField) member declaration: `[specifiers] var a, b : T;`,
+		// `default x = value;`, or `[specifiers] autobind c : T = ...;`. Promoted to
+		// unit status (rather than living in gap territory) because real mods add
+		// these to vanilla classes routinely, and gap content always reverts to
+		// vanilla's own text on reassembly - which silently dropped such declarations
+		// while the code referencing them survived, producing merged output the game
+		// refuses to compile (docs/bugs/function-level-merge-gap-handling.md,
+		// defect 2).
+		MemberDeclaration,
 	}
 
 	// One function/event declaration (with its body, or just a signature for a
-	// body-less forward/interface declaration) or one @addField-decorated field
-	// declaration, as a verbatim slice of the original file text. FullText always
-	// includes any immediately-preceding annotation lines (@wrapMethod/@addMethod/
-	// @replaceMethod/@addField) - see ScriptUnitExtractor.Extract.
+	// body-less forward/interface declaration), one @addField-decorated field
+	// declaration, or one plain member declaration (var/default/autobind - see
+	// ScriptUnitKind.MemberDeclaration), as a verbatim slice of the original file
+	// text. FullText always includes any immediately-preceding annotation lines
+	// (@wrapMethod/@addMethod/@replaceMethod/@addField) - see
+	// ScriptUnitExtractor.Extract.
 	public readonly struct ScriptUnit
 	{
 		public string Name { get; }
+		// Name qualified by the enclosing top-level type ("CR4Player::mCSMCR"), or
+		// just Name for a global-scope unit. This - not Name - is what UnitAligner
+		// matches on: member names ("owner", "isActive", ...) recur across the
+		// multiple classes a single real .ws file contains, so name-only identity
+		// would routinely mis-align a member of one class against a same-named member
+		// of another. (Function names were measured not to collide within real files,
+		// but scoping them too costs nothing and closes the same latent risk.)
+		public string ScopedName { get; }
 		public ScriptUnitKind Kind { get; }
 		public bool HasBody { get; }
 		public int StartOffset { get; }
 		public int EndOffset { get; }
 		public string FullText { get; }
 
-		public ScriptUnit(string name, ScriptUnitKind kind, bool hasBody, int startOffset, int endOffset, string fullText)
+		public ScriptUnit(string name, string scopedName, ScriptUnitKind kind, bool hasBody, int startOffset, int endOffset, string fullText)
 		{
 			Name = name;
+			ScopedName = scopedName;
 			Kind = kind;
 			HasBody = hasBody;
 			StartOffset = startOffset;
 			EndOffset = endOffset;
 			FullText = fullText;
 		}
+
+		// The human-facing noun for audit/decision messages - "function OnSpawned" vs
+		// "declaration mCSMCR" - so FunctionLevelMergeEngine's notes don't call a
+		// variable a function.
+		public string DescribeKind() => Kind == ScriptUnitKind.Function ? "function" : "declaration";
 	}
 
 	// A file split into alternating gap/unit segments: Gaps[0] + Units[0].FullText +
@@ -101,6 +126,31 @@ namespace WitcherScriptMerger.Tools
 		static readonly Regex AddFieldAnnotationRegex = new Regex(@"^@addField\s*\([^()\r\n]*\)\s*$", RegexOptions.Compiled);
 		static readonly Regex FieldNameRegex = new Regex(@"\bvar\s+(?<name>\w+)\s*:", RegexOptions.Compiled);
 
+		// Plain member declarations (ScriptUnitKind.MemberDeclaration). Three shapes,
+		// all ';'-terminated:
+		//   [specifiers] var a, b : Type;          (multi-declarator lists are one unit,
+		//                                           keyed by the comma-joined name list -
+		//                                           a mod splitting/merging declarators
+		//                                           aligns as delete+insert, which the
+		//                                           engine already resolves conservatively)
+		//   default x = value;
+		//   [specifiers] autobind c : Type = ...;
+		// ^-anchored against the mask like DeclarationRegex, so a masked-out string/
+		// comment can never fake one. Local variables inside function bodies are never
+		// reached: Extract consumes an entire function body as one unit and resumes
+		// scanning after it, so member scans only ever run over between-unit territory.
+		static readonly Regex MemberDeclRegex = new Regex(
+			@"^[ \t]*(?:(?:" + SpecifierAlternation + @")\s+)*(?:(?<varkw>var|autobind)\s+(?<names>\w+(?:\s*,\s*\w+)*)\s*:|(?<defkw>default)\s+(?<defname>\w+)\s*=)",
+			RegexOptions.Compiled | RegexOptions.Multiline);
+
+		// Top-level type headers, for scope tracking (see ScriptUnit.ScopedName).
+		// Matched against the mask; types are top-level-only in WitcherScript (see this
+		// class's own header comment), so scanning header -> matching close brace ->
+		// next header never has to consider nesting.
+		static readonly Regex TypeHeaderRegex = new Regex(
+			@"\b(?<kind>class|state|struct|enum)\s+(?<name>\w+)(?:\s+in\s+(?<parent>\w+))?",
+			RegexOptions.Compiled);
+
 		enum SpanKind : byte
 		{
 			None,
@@ -117,6 +167,7 @@ namespace WitcherScriptMerger.Tools
 			var mask = BuildMask(text, kinds, blankStringsToo: true);
 			var lineStarts = ComputeLineStarts(text);
 			var addFieldLineStarts = FindAllAddFieldAnnotationLineStarts(mask, lineStarts);
+			var typeRanges = FindTypeRanges(mask);
 
 			var gaps = new List<string>();
 			var units = new List<ScriptUnit>();
@@ -134,6 +185,7 @@ namespace WitcherScriptMerger.Tools
 			while (pos <= text.Length)
 			{
 				var funcMatch = DeclarationRegex.Match(mask, pos);
+				var memberMatch = MemberDeclRegex.Match(mask, pos);
 
 				while (addFieldIndex < addFieldLineStarts.Count && addFieldLineStarts[addFieldIndex] < pos)
 					++addFieldIndex;
@@ -141,15 +193,22 @@ namespace WitcherScriptMerger.Tools
 
 				var funcPos = funcMatch.Success ? funcMatch.Index : int.MaxValue;
 				var fieldPos = fieldLineStart ?? int.MaxValue;
+				var memberPos = memberMatch.Success ? memberMatch.Index : int.MaxValue;
 
-				if (funcPos == int.MaxValue && fieldPos == int.MaxValue)
+				if (funcPos == int.MaxValue && fieldPos == int.MaxValue && memberPos == int.MaxValue)
 					break;
 
+				// Earliest match wins. An @addField unit's own `var ...` line also
+				// matches MemberDeclRegex, but its annotation line sits strictly
+				// earlier, so the field extraction always claims it first and consumes
+				// through the terminating ';' before the member scan can see it.
 				ScriptUnit unit;
-				if (fieldPos < funcPos)
-					unit = ExtractField(text, mask, lineStarts, fieldPos, cursor);
+				if (fieldPos <= funcPos && fieldPos <= memberPos)
+					unit = ExtractField(text, mask, lineStarts, fieldPos, cursor, typeRanges);
+				else if (memberPos < funcPos)
+					unit = ExtractMemberDeclaration(text, mask, memberMatch, cursor, typeRanges);
 				else
-					unit = ExtractFunction(text, mask, lineStarts, funcMatch, cursor);
+					unit = ExtractFunction(text, mask, lineStarts, funcMatch, cursor, typeRanges);
 
 				gaps.Add(text.Substring(cursor, unit.StartOffset - cursor));
 				units.Add(unit);
@@ -184,11 +243,23 @@ namespace WitcherScriptMerger.Tools
 			return BuildMask(text, kinds, blankStringsToo: false);
 		}
 
+		// Strings AND comments blanked - the same brace-safe scratch buffer Extract
+		// uses internally, exposed for FunctionLevelMergeEngine's post-rescue sanity
+		// gate (which needs to walk brace depth over reassembled output without a
+		// literal/comment brace corrupting the count). Internal, not public: a
+		// structural scratch buffer, not part of this class's stable contract. Throws
+		// ExtractionException on unterminated constructs, same as Extract.
+		internal static string BuildStructuralMask(string text)
+		{
+			var kinds = ClassifySpans(text);
+			return BuildMask(text, kinds, blankStringsToo: true);
+		}
+
 		#endregion
 
 		#region Unit extraction
 
-		static ScriptUnit ExtractFunction(string text, string mask, List<int> lineStarts, Match declMatch, int cursor)
+		static ScriptUnit ExtractFunction(string text, string mask, List<int> lineStarts, Match declMatch, int cursor, List<TypeRange> typeRanges)
 		{
 			var unitStart = Math.Max(cursor, ExtendStartBackwardOverAnnotations(mask, lineStarts, declMatch.Index));
 
@@ -228,12 +299,13 @@ namespace WitcherScriptMerger.Tools
 				unitEnd = closeBrace + 1;
 			}
 
+			var name = declMatch.Groups["name"].Value;
 			return new ScriptUnit(
-				declMatch.Groups["name"].Value, ScriptUnitKind.Function, hasBody,
+				name, QualifyName(typeRanges, declMatch.Index, name), ScriptUnitKind.Function, hasBody,
 				unitStart, unitEnd, text.Substring(unitStart, unitEnd - unitStart));
 		}
 
-		static ScriptUnit ExtractField(string text, string mask, List<int> lineStarts, int annotationLineStart, int cursor)
+		static ScriptUnit ExtractField(string text, string mask, List<int> lineStarts, int annotationLineStart, int cursor, List<TypeRange> typeRanges)
 		{
 			var unitStart = Math.Max(cursor, ExtendStartBackwardOverAnnotations(mask, lineStarts, annotationLineStart));
 
@@ -249,7 +321,106 @@ namespace WitcherScriptMerger.Tools
 			var nameMatch = FieldNameRegex.Match(mask, annotationLineEnd, terminator - annotationLineEnd);
 			var name = nameMatch.Success ? nameMatch.Groups["name"].Value : "@addField#" + unitStart;
 
-			return new ScriptUnit(name, ScriptUnitKind.Field, hasBody: false, unitStart, unitEnd, fullText);
+			return new ScriptUnit(name, QualifyName(typeRanges, annotationLineStart, name), ScriptUnitKind.Field, hasBody: false, unitStart, unitEnd, fullText);
+		}
+
+		// A plain member declaration - see MemberDeclRegex for the shapes covered. The
+		// unit is the whole statement through its terminating ';'. `default x = ...` is
+		// keyed "default:x", distinct from the member variable x it initializes - a mod
+		// changing a default value and a mod changing the declaration are different
+		// edits to different statements, and conflating their identities would make one
+		// mod's default-value change look like an edit to the other's declaration.
+		static ScriptUnit ExtractMemberDeclaration(string text, string mask, Match declMatch, int cursor, List<TypeRange> typeRanges)
+		{
+			var unitStart = Math.Max(cursor, declMatch.Index);
+
+			var terminator = FindNextChar(mask, declMatch.Index + declMatch.Length, ';');
+			if (terminator < 0)
+				throw new ExtractionException(
+					"Reached end of file looking for the ';' terminating the member declaration " +
+					"starting at offset " + declMatch.Index + ".");
+
+			var unitEnd = terminator + 1;
+			string name;
+			if (declMatch.Groups["defkw"].Success)
+			{
+				name = "default:" + declMatch.Groups["defname"].Value;
+			}
+			else
+			{
+				// Multi-declarator lists ("var a, b : int;") stay one unit, keyed by the
+				// whitespace-normalized comma-joined list.
+				name = Regex.Replace(declMatch.Groups["names"].Value, @"\s+", "");
+			}
+
+			return new ScriptUnit(
+				name, QualifyName(typeRanges, declMatch.Index, name), ScriptUnitKind.MemberDeclaration,
+				hasBody: false, unitStart, unitEnd, text.Substring(unitStart, unitEnd - unitStart));
+		}
+
+		// One top-level type's body span: units whose start offset falls inside
+		// (OpenBrace, CloseBrace) get ScopeName as their ScopedName qualifier.
+		readonly struct TypeRange
+		{
+			public string ScopeName { get; }
+			public int OpenBrace { get; }
+			public int CloseBrace { get; }
+
+			public TypeRange(string scopeName, int openBrace, int closeBrace)
+			{
+				ScopeName = scopeName;
+				OpenBrace = openBrace;
+				CloseBrace = closeBrace;
+			}
+		}
+
+		// Finds every top-level type's body span, for scope-qualifying unit names.
+		// Types are top-level only in WitcherScript (never nested - see this class's
+		// header comment), so each header's matching close brace can be found by plain
+		// depth counting and the scan can resume after the header rather than after the
+		// body (a body-less `import class CX;`-style declaration has no braces at all).
+		// A `state Combat in CR4Player` header qualifies as "Combat@CR4Player" - the
+		// same state name recurs across parent classes in real game scripts.
+		static List<TypeRange> FindTypeRanges(string mask)
+		{
+			var result = new List<TypeRange>();
+			foreach (Match header in TypeHeaderRegex.Matches(mask))
+			{
+				// Skip a header that sits inside a previously recorded type's body -
+				// grammar says that can't happen, but a stray masked keyword in an
+				// unusual construct shouldn't corrupt scope attribution for the rest of
+				// the file.
+				if (result.Count > 0 && header.Index < result[result.Count - 1].CloseBrace)
+					continue;
+
+				var terminator = FindNextSemicolonOrBrace(mask, header.Index + header.Length);
+				if (terminator < 0 || mask[terminator] == ';')
+					continue; // body-less declaration - nothing to scope
+
+				var closeBrace = FindMatchingDelimiter(mask, terminator, '{', '}');
+				if (closeBrace < 0)
+					throw new ExtractionException(
+						"Unbalanced braces in the body of type '" + header.Groups["name"].Value +
+						"' starting at offset " + header.Index + ".");
+
+				var scopeName = header.Groups["parent"].Success
+					? header.Groups["name"].Value + "@" + header.Groups["parent"].Value
+					: header.Groups["name"].Value;
+				result.Add(new TypeRange(scopeName, terminator, closeBrace));
+			}
+			return result;
+		}
+
+		static string QualifyName(List<TypeRange> typeRanges, int offset, string name)
+		{
+			foreach (var range in typeRanges)
+			{
+				if (offset > range.OpenBrace && offset < range.CloseBrace)
+					return range.ScopeName + "::" + name;
+				if (range.OpenBrace > offset)
+					break; // ranges are in file order; nothing later can contain offset
+			}
+			return name;
 		}
 
 		// Walks backward over any immediately preceding @-annotation lines (tolerating

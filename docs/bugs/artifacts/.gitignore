@@ -1,0 +1,4 @@
+# Raw third-party merge output kept as a reproduction fixture.
+# CDPR-derived script content - deliberately never committed.
+*
+!.gitignore
