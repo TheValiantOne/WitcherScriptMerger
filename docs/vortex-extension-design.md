@@ -15,14 +15,26 @@ outside WSM's own source control (see "External tool dependencies" in the root
 `CLAUDE.md`); read any KDiff3-specific mentions below as historical context, not
 current fact.
 
-**Status: design document only, now with settled decisions.** No TypeScript/Node
-scaffolding exists in this repository yet, and this refresh does not add any — actual
-implementation remains a separate, later batch. What *has* changed since the first
-draft: a planning effort (research, an advisor consult, and explicit owner decisions)
-has settled several structural questions that were previously open, most importantly
-**scope** and **location** (both below). This document is still the starting point for
-that later implementation, updated to reflect what's now decided rather than left as
-open options.
+**Status: implementation has landed; this document is now reconciled against it, not
+just a pre-implementation prediction.** `vortex-extension/` now exists in this
+repository and has real, shipped code across several units (referred to below as
+E through J): a build/entry-point scaffold and MCP stdio client (E), WSM tool
+acquisition from GitHub Releases plus the `WSM_<KeyName>` env-var configuration
+mechanism (F), post-deploy conflict scanning and notification (G), the "Resolve Script
+Conflicts" action and merge panel (H), a merge-history dashlet (I), and a
+dependency/status dashlet plus wcc_lite auto-acquisition (J). See
+`vortex-extension/README.md` for a user-facing description of what actually shipped,
+and this document's own sections below (particularly §2.2, §3, §5, and §6) for how that
+compares against what was originally proposed here. A separate, later unit covering
+Vortex/Collections coexistence hazards (§6, Open Question 1) may be in progress
+elsewhere and is out of scope for this reconciliation pass — Open Question 1 below is
+left exactly as it was.
+
+What *had* changed as of the previous refresh, before any of E–J existed: a planning
+effort (research, an advisor consult, and explicit owner decisions) settled several
+structural questions that were previously open, most importantly **scope** and
+**location** (both below). This document was, and remains, the starting point the
+implementation actually followed.
 
 **Scope (decided):** a **companion extension** to Vortex's existing, actively-maintained
 built-in Witcher 3 game extension (`game-witcher3` — see §0 for its current location).
@@ -264,6 +276,49 @@ Setup flow:
    surfaces it (read-only or editable) in Vortex's per-game settings panel so the user
    can override it if they already have a WSM install they prefer.
 
+**Reconciliation against Units E–J (this section's setup flow, step by step):**
+
+1. **Shipped**, close to as proposed: `toolAcquisition.ts`'s `ensureWsmToolRegistered`
+   is a local-only, network-free check for a previously-acquired binary in this
+   extension's own private storage, re-run on every extension load and every
+   `gamemode-activated` event (`index.ts`). **Not yet wired to any user-facing trigger,
+   though** — see the next bullet.
+2. **Partially shipped, and diverges from the original proposal in two ways.** (a) is
+   real: `toolAcquisition.ts`'s `acquireWsmTool` downloads
+   `WitcherScriptMerger.Headless-<version>-win-x64.zip` from this repo's own GitHub
+   Releases (option (b) above — no bundled-copy option (a) was built, and none is
+   needed now that a self-contained publish exists). (b) **"verify via checksum before
+   trusting it" did not ship as a checksum** — `release.yml` publishes no checksum
+   manifest, so `githubRelease.ts`'s `downloadReleaseAsset` instead verifies the
+   downloaded byte count against the size GitHub's API reported for that asset: a
+   transfer-completeness check (catches truncation/corruption), not a cryptographic
+   integrity check (doesn't catch a maliciously-substituted asset of the same size).
+   (c) **No UI trigger exists yet for the actual acquisition call.** `acquireWsmTool` is
+   implemented, exported, and covered by `test/toolAcquisition.integration.test.ts`, but
+   no unit through J has registered a "Get WitcherScriptMerger" action that calls it —
+   `resolveAction.ts` only shows an error notification telling the user to acquire WSM
+   first if no tool is registered yet; it doesn't offer to do so. (d) **As of this
+   writing, no GitHub Release actually exists on this repo** (no version tag has been
+   pushed), so this download path is real but has never run against a real release —
+   see `vortex-extension/README.md`. (e) The minimum-supported-version check this step
+   originally anticipated once §6 Open Question 4's release-workflow/`--version` work
+   landed **was not built** — `AcquireWsmToolOptions.version` is caller-supplied with no
+   minimum-version comparison anywhere; see Open Question 4 below.
+3. **Shipped, matching the proposed fallback exactly.** `bundleTools.ts`'s
+   `detectQuickBms`/`detectWccLite` check this extension's own managed storage first,
+   then fall back to detecting a prior `IDCs/WitcherScriptMerger` fork install's own
+   `Tools\` subfolder (the build `game-witcher3` may have already downloaded as
+   `W3ScriptMerger`) — exactly the "detect and reuse whatever `game-witcher3` already
+   fetched" mechanism this step proposed. wcc_lite additionally gained a real
+   auto-download path (`wccLiteAcquisition.ts`, Unit J) not originally scoped for this
+   section — see §6 Open Question 2, still genuinely open on whether that auto-download
+   should exist at all as a matter of policy, independent of the fact that it now does
+   as a matter of code.
+4. **Not shipped.** No per-game settings panel exists for this extension, editable or
+   otherwise — there is currently no way for a user to override the resolved WSM binary
+   path via this extension's own UI. See `vortex-extension/README.md`'s "Known gaps"
+   section.
+
 ---
 
 ## 3. Invocation model
@@ -349,6 +404,33 @@ stdio handshake cost across a burst of related calls (e.g. `scan_conflicts` then
 `merge_conflicts` from the same review session), not server-side work — which is
 exactly what a per-workflow process buys without paying for a daemon's crash/restart
 and orphaned-process-cleanup complexity.
+
+**Reconciliation against Units E–J: implementation diverged from this section's
+recommendation, and did so from the very first unit.** This section recommended
+shipping the CLI `merge` verb first, treating MCP as a v2 enhancement. What actually
+happened: Unit E (the foundation scaffold) built the hand-rolled MCP `child_process`
+client — `mcpClient.ts` — as **its own main deliverable**, per its own PR description,
+before any other extension feature existed, and no unit from E through J ever
+implemented the CLI-driven `api.runExecutable('merge', ...)` + `MergeInventory.xml`-diff
+flow this section described as the v1 default. Every feature that shipped (conflict
+scanning, the resolve action, the merge-history dashlet, the status dashlet) is built
+on `WsmMcpClient`, not the CLI.
+
+Two facts this section's own reasoning already supplies explain why, without needing to
+speculate about unit-ordering decisions this document has no visibility into: (1) this
+section's own `IRunOptions`-has-no-stdio finding means an MCP client was the only way to
+get structured output or a pre-merge preview at all, so once *any* feature needed
+either, that client had to exist; and (2) Unit H's "Resolve Script Conflicts" action, per
+`resolveAction.ts`'s own doc comment, needed exactly that preview
+(`merge_conflicts({dryRun: true})`) from its first version, not as a later addition. This
+section's own listed CLI-only limitation — no pre-merge preview possible without
+duplicating WSM's own scanning logic — is exactly the gap that requirement runs into.
+
+This is a correction to this document's own recommendation, not a claim it was
+unreasonable at the time it was written. The CLI `merge` verb itself is unaffected by
+any of this: it still exists in both hosts (see each host's own `CLAUDE.md`) and remains
+available to a future headless/scripted caller that doesn't need MCP's richer surface —
+it's just not what this extension itself ended up using anywhere.
 
 ---
 
@@ -519,13 +601,67 @@ Proposed surface, roughly in order of how load-bearing each piece is:
   same conflict interactively. The extension should probably offer both as fallback
   actions rather than trying to reproduce manual conflict resolution itself.
 
+**Reconciliation against Units E–J:** every proposed surface above shipped, on the MCP
+("v2") shape throughout — see §3's own reconciliation note for why the CLI ("v1") path
+was never built at all, so there is no "v1 first, v2 later" split in what actually
+exists; each item below shipped as its v2 description, from its first version.
+
+- **Notification/badge — shipped (Unit G, `conflictNotifications.ts`).** The real v2
+  behavior described above: a post-deploy `scan_conflicts` call, with a dashboard
+  notification only when the *unresolved* conflict set's signature has changed since
+  the last check that Vortex session (not an unconditional per-deploy prompt).
+  Suppressed during mod/dependency-install activity so a Collection install's
+  deploy-per-mod burst doesn't spawn a scan per mod or notify against a mid-install
+  state.
+- **"Resolve Script Conflicts" action — shipped (Unit H, `resolveAction.ts` +
+  `mergePanel.ts`), the v2 shape but not full v2 scope.** Dry-run preview via
+  `merge_conflicts({dryRun: true})`, a Markdown dialog (`IDialogContent`'s `md` field,
+  not a custom React panel — see `mergePanel.ts`'s own doc comment for why: no JSX
+  pipeline exists in this project yet) showing merged/skipped/unmatched counts plus
+  function-level merge decisions, then confirm → real merge → result dialog. **Narrower
+  than this section proposed**: no per-file selection and no `orderOverrides` — the
+  shipped action always merges every detected conflict in one pass, a deliberate v1
+  scope-cut noted in `resolveAction.ts`'s own doc comment, not an oversight.
+- **Merge history view — shipped (Unit I, `mergeHistoryDashlet.ts`), via `list_merges`
+  specifically** — the "once available... for parity/simplicity" option this section
+  named, not a direct `MergeInventory.xml` parse. Shows relative path, merged mod name,
+  and per-source-mod hashes, with a manual Refresh button; fetches on mount and on
+  refresh only (not on a timer).
+- **Dependency/status tile — shipped (Unit J, `statusTile.ts` + `wsmStatusSummary.ts`),
+  via `get_status`** as proposed, plus real (not just detected) wcc_lite acquisition
+  beyond what this section scoped — see §2.2's own reconciliation note (step 3) and §6
+  Open Question 2 for the licensing caveat that addition raised.
+- **Skipped/manual-resolution reporting — shipped (Unit H, `mergePanel.ts`'s "Needs
+  manual review" section), but resolved differently than either fallback this section
+  proposed.** Neither "open the sidecar in your own editor" nor "launch WSM's GUI" is
+  built as a distinct extension-side action — instead, WSM's own headless merge
+  (`DiffPlexMergeEngine.MergeHeadless`, per `WitcherScriptMerger.Core/Mcp/CLAUDE.md`)
+  already opens each skipped file's `DiffPlexConflicts/` sidecar in the OS's default
+  associated editor as a side effect of a real (non-dry-run) merge call, so the
+  extension's own dialog just reports that this already happened rather than adding a
+  second launcher on top of it. This only covers WSM's headless-flow file editor
+  though — `resolveAction.ts`'s own doc comment notes there's deliberately no
+  "launch WSM's GUI" fallback either, since Unit F only acquires the GUI-less
+  Headless build.
+- **Not proposed by this section, but added: a "Get wcc_lite from Nexus Mods" button**
+  on the status tile (Unit J) — see §2.2's reconciliation note (step 3) and the
+  licensing caveat in §6 Open Question 2.
+- **Proposed nowhere in this section, and still missing: any "Get WitcherScriptMerger"
+  trigger**, or any settings/override UI for the resolved WSM path — see §2.2's
+  reconciliation note (steps 2 and 4) and `vortex-extension/README.md`'s "Known gaps"
+  section.
+
 ---
 
 ## 6. Open questions
 
-Updated against the planning effort's findings — several of the original 8 are now
-resolved (marked **Resolved**), one is **Partially resolved**, and the rest remain
-genuinely open (marked **Open**) because nothing found so far settles them.
+Updated against the planning effort's findings, and now again against what Units E–J
+actually shipped (this pass) — several of the original 8 are now resolved (marked
+**Resolved**), one is **Partially resolved**, and the rest remain genuinely open
+(marked **Open**) because nothing found so far settles them. **Open Question 1 is left
+exactly as it reads below, word for word, unchanged by this reconciliation pass** — a
+separate unit's own work may bear on it and this document should not get ahead of
+that.
 
 1. **Relationship to `game-witcher3`'s existing built-in Script Merger integration
    (§0). Partially resolved.** The scope decision at the top of this document settles
@@ -542,37 +678,56 @@ genuinely open (marked **Open**) because nothing found so far settles them.
    per-profile backup/restore having no concept of `MergeInventory.xml` at all (§0, new
    this round). Both need an explicit answer before real implementation, not just
    acknowledgment that they exist.
-2. **Open.** Packaging/distribution strategy for QuickBMS/wcc_lite. The root `CLAUDE.md`
-   is explicit that both have unresolved licensing and must never enter source
-   control. Does that same caution block this extension from ever auto-downloading
-   them on the user's behalf, even from a third-party mirror? Or is "detect and reuse
-   whatever `game-witcher3` already fetched" (§2.2 step 3) the sanctioned answer,
-   permanently, regardless of how good WSM's own self-contained-publish story gets?
-   Nothing found this round resolves this — it's still a licensing/policy call for the
-   repo owner.
+2. **Still Open — not resolved by this reconciliation, deliberately.** Packaging/
+   distribution strategy for QuickBMS/wcc_lite. The root `CLAUDE.md` is explicit that
+   both have unresolved licensing and must never enter source control. Does that same
+   caution block this extension from ever auto-downloading them on the user's behalf,
+   even from a third-party mirror? Or is "detect and reuse whatever `game-witcher3`
+   already fetched" (§2.2 step 3) the sanctioned answer, permanently, regardless of how
+   good WSM's own self-contained-publish story gets? **Update: Unit J shipped code that
+   answers a narrower version of this question, without the repo owner's sign-off this
+   item calls for.** `wccLiteAcquisition.ts`/`nexusDownloader.ts` now auto-download
+   wcc_lite from its Nexus Mods "Official ModKit" page through Vortex's own
+   authenticated Nexus-download mechanism, going beyond the "detect and reuse" option
+   named above — see §2.2's own reconciliation note (step 3) and Unit J's own PR
+   description, which flags this exact tension explicitly rather than treating it as
+   settled. **This item remains marked Open regardless**: shipped code is not the same
+   as an owner decision, and the question this item asks (should this be happening at
+   all, as a matter of licensing policy) is still unanswered. QuickBMS itself is
+   unaffected — it is still never auto-downloaded, detection/link-only, per
+   `bundleTools.ts`.
 3. **Open.** Does this become a public, Nexus-Mods-registry-listed Vortex extension,
    or stay a manually-installed/internal tool? This affects branding, support burden,
-   and whether Nexus Mods' own extension review process applies. Nothing found this
-   round resolves this either.
-4. **Resolved.** Minimum supported WSM CLI/MCP version. A GitHub Actions release
-   workflow producing self-contained single-file builds attached to GitHub Releases,
-   plus a `--version` CLI flag and an MCP server-info version string, are landing
-   alongside this doc's refresh (a parallel WSM-side unit — not yet in `main` as of
-   this writing, so treat as imminent rather than already-available). Once live, the
-   extension has something concrete to version-check a download or an already-resolved
-   binary against, rather than trusting whatever a release tag happens to contain.
-5. **Resolved (design-level; not yet landed in code).** Should WSM itself grow a
-   config-override mechanism, instead of requiring an external caller to hand-edit
-   `WitcherScriptMerger.exe.config` XML? Yes — the `WSM_<KeyName>` environment-variable
-   override described in §4.1 is the answer, and is that first-class, supported
-   mechanism once it exists: available to this extension, `game-witcher3`, and any
-   other caller, without anyone independently reimplementing XML surgery against an
-   internal config format that could change. **As of this writing, that mechanism does
-   not yet exist in `WitcherScriptMerger.Core/AppSettings.cs`** — it's landing
-   alongside this doc's refresh in a parallel WSM-side unit (same status as Open
-   Question 4's release-workflow/`--version` work), not already merged to `main`. Until
-   it lands, an implementation starting today has to fall back to the hand-edit pattern
-   and its interim safety rule described in §4.1.
+   and whether Nexus Mods' own extension review process applies. Nothing found in
+   Units E–J resolves this either — see `vortex-extension/README.md`'s explicit note
+   that the extension is not yet published anywhere.
+4. **Resolved, with one caveat.** Minimum supported WSM CLI/MCP version. A GitHub
+   Actions release workflow (`.github/workflows/release.yml`) producing self-contained
+   single-file builds attached to GitHub Releases, plus a `--version` CLI flag
+   (confirmed present in both `WitcherScriptMerger/Program.cs` and
+   `WitcherScriptMerger.Headless/Program.cs`) and an MCP server-info version string
+   (`WitcherScriptMerger.Core/VersionInfo.cs`), have landed in `main`. **Caveat: the
+   enabling mechanism is resolved, but the actual minimum-version check this question
+   was really asking about was never built** — `toolAcquisition.ts`'s
+   `AcquireWsmToolOptions.version` is caller-supplied with no comparison against any
+   minimum anywhere in the extension. As of this writing, no version tag has actually
+   been pushed to this repo either, so no GitHub Release exists yet for any of this to
+   version-check against in practice — see `vortex-extension/README.md`.
+5. **Resolved — now landed in code, not just at the design level.** Should WSM itself
+   grow a config-override mechanism, instead of requiring an external caller to
+   hand-edit `WitcherScriptMerger.exe.config` XML? Yes — the `WSM_<KeyName>`
+   environment-variable override described in §4.1 is the answer, and it is now real:
+   `WitcherScriptMerger.Core/AppSettings.cs` defines
+   `EnvironmentVariablePrefix = "WSM_"` and `GetEnvironmentOverride(key)`, checked
+   before falling through to `ConfigurationManager`. `vortex-extension/src/wsmEnv.ts`
+   (`buildWsmEnv`/`mergeWithProcessEnv`) is this extension's own client for exactly
+   this mechanism, and it's the *only* way the extension configures a spawned WSM
+   process — it never reads or writes `.exe.config`/`.dll.config` XML anywhere.
+   `test/toolAcquisition.integration.test.ts` proves this end-to-end against a real
+   spawned process (deliberately setting wrong placeholder values in a scratch XML
+   config and asserting the env-var override wins). The hand-edit pattern and its
+   interim safety rule described earlier in §4.1 are now historical context only —
+   nothing in this extension uses them.
 6. **Resolved.** Process lifecycle for MCP mode (§3): spawn per user-initiated
    workflow, tear down when the relevant panel/dashlet closes. Not a permanent
    session-long daemon, and not spawn-per-tool-call either — see §3's reasoning
@@ -644,3 +799,12 @@ genuinely open (marked **Open**) because nothing found so far settles them.
   `init(context)`, not `activate(context)` as the first draft had it.
 - Reporting on Nexus Mods' 2026 SteamOS/Steam Deck commitment for Vortex (PC Gamer,
   Steam Deck HQ, OpenCritic coverage of the Nexus Mods roadmap announcement).
+- **This reconciliation pass (Units E–J against this document)**: the actual shipped
+  source under `vortex-extension/src/` and `vortex-extension/test/` (read in full, not
+  sampled), each unit's own merged PR description (`gh pr list`/`gh pr view` against
+  `TheValiantOne/WitcherScriptMerger`), and direct verification of the WSM-side claims
+  this document makes about code outside `vortex-extension/` —
+  `WitcherScriptMerger.Core/AppSettings.cs` (the `WSM_<KeyName>` mechanism, Open
+  Question 5), `.github/workflows/release.yml` and both hosts' `Program.cs` (the
+  `--version` flag and release workflow, Open Question 4) — rather than trusting this
+  document's own prior "landing alongside this refresh" language at face value.
