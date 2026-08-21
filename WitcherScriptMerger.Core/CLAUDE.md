@@ -205,6 +205,42 @@ inconsistently — full path for the regex, trimmed segment for the allowlist �
 related bug caught in the same review). Regression-tested via
 `FileMergerTests.IsVanillaDlcBundleFolder_FolderNameMerelyEndsInPattern_ReturnsFalse`.
 
+## The merged mod is excluded from the conflict scan
+
+`ModFileIndex.BuildAsync` enumerates `Directory.GetDirectories(ModsDirectory, "mod*")`
+and filters the result through `GetIgnoredModNames()`. That filter honors the
+`IgnoreModNames` setting **and** always excludes the merged mod itself
+(`MergedModName`, `mod0000_MergedFiles` by default).
+
+Excluding it is not cosmetic. The merged mod is this tool's own *output*, but its
+directory name starts with `mod`, so it matches the same glob as any source mod. Left in
+the scan it becomes a merge input alongside the very mods it was built from, and each
+subsequent run re-applies those mods' edits on top of already-merged text — **a
+re-merge becomes cumulative instead of idempotent**. Inserted blocks accumulate one fresh
+copy per run, and a losing most-distinct-from-vanilla tiebreak can additionally revert an
+edit a previous run had kept. Confirmed on a real 249-mod install before the fix: a single
+`modBloodAndSteel` insertion present 6× in `actor.ws` and a `modCriSlowMoCR` one 6× in
+`damageManagerProcessor.ws` (each appears exactly once in the mod's own file), 37
+duplicated mod-added lines across 11 of 42 merged files, and one `modTTMutagenSwap` edit
+reverted outright. Nothing surfaced this as an error — the output stayed syntactically
+valid and merged "successfully" every time, which is why it went unnoticed across
+repeated merges.
+
+The name-matching lives in `Paths.NormalizeMergedModName(string)` — a non-interactive,
+argument-taking counterpart to `Paths.RetrieveMergedModName()`. The scan path must not use
+the latter: it can prompt via `ConfirmInvalidModName` and message through
+`AppState.Notifier`, neither of which may fire just because mod directories are being
+enumerated. Both apply the same `Paths.MergedModNameMaxLength` (64) truncation, which is
+what decides the directory name a merge actually writes — the two must agree or a scan
+would fail to recognize the very directory the merge creates. `NormalizeMergedModName`
+additionally trims, deliberately: its result is compared against a `DirectoryInfo.Name`,
+which never carries surrounding whitespace.
+
+`ModFileIndex.BuildIgnoredModNames(ignoreModNamesSetting, mergedModNameSetting)` is the
+pure function behind `GetIgnoredModNames()`, split out so it's unit-testable without
+touching `AppState.Settings` — see `WitcherScriptMerger.Tests/CLAUDE.md`'s
+"`AppState.Settings`-safety constraints" and `FileIndex/ModFileIndexTests.cs`.
+
 ## CLI & MCP orchestration (`Cli/`, `Mcp/`)
 
 `Cli/MergeOperations.cs` is the scan-then-merge sequence shared by both hosts' `merge`
@@ -535,6 +571,15 @@ only changes what gates a *run starting at all*, not the per-conflict bundle beh
 host's own `CLAUDE.md` for its own startup-level check; the MCP tools' own per-call gate
 (`RequireDependenciesAndModsDirectory`, above) always uses the text-merge-only check
 regardless of host.
+
+Both hosts' `merge` CLI verbs now use the text-merge-only gate. The WinForms host's verb
+previously used the combined `ValidateDependencyPaths()`, which made `merge` refuse to
+start at all on an install whose conflicts were entirely flat-file (`.ws`/`.xml`) — the
+common case, and the only category either headless path can resolve anyway. Since neither
+QuickBMS nor wcc_lite is committed to this repo (see the root `CLAUDE.md`), a plain
+clone-and-run hit that refusal every time, with an error message pointing at the GUI's
+dependency setup for tooling the run didn't actually need. `ValidateDependencyPaths()` is
+still there for callers that genuinely want the combined check.
 
 ## Hash format (`MergeInventory.xml`)
 

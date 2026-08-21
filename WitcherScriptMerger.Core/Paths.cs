@@ -162,6 +162,36 @@ namespace WitcherScriptMerger
 				return null;
 		}
 
+		// The merged mod's directory name is capped at this length; anything longer in the
+		// MergedModName setting is truncated to it, and that truncation is what decides the
+		// directory actually written to. Named (rather than left as a literal in
+		// RetrieveMergedModName) so NormalizeMergedModName below can apply the same cap
+		// without restating it - the two must agree, or a scan would fail to recognize the
+		// very directory a merge writes.
+		public const int MergedModNameMaxLength = 64;
+
+		// Non-interactive counterpart to RetrieveMergedModName, for callers that only need
+		// to *recognize* the merged mod's directory name rather than resolve-and-validate a
+		// name to write to. Takes the raw setting value as an argument and touches neither
+		// AppState.Settings nor AppState.Notifier, so it's safe on a scan path (and directly
+		// unit-testable - see WitcherScriptMerger.Tests/CLAUDE.md's "AppState.Settings-safety
+		// constraints"): RetrieveMergedModName can prompt via ConfirmInvalidModName, which
+		// must never happen just because a scan is enumerating mod directories.
+		//
+		// Unlike RetrieveMergedModName this also trims, deliberately: the result is compared
+		// against a DirectoryInfo.Name, which never carries surrounding whitespace, so a
+		// setting value padded with spaces would otherwise silently fail to match and let the
+		// merged mod back into the scan - the exact failure this method exists to prevent.
+		public static string NormalizeMergedModName(string mergedModName)
+		{
+			if (string.IsNullOrWhiteSpace(mergedModName))
+				return null;
+			mergedModName = mergedModName.Trim();
+			return mergedModName.Length > MergedModNameMaxLength
+				? mergedModName.Substring(0, MergedModNameMaxLength)
+				: mergedModName;
+		}
+
 		public static string RetrieveMergedModName()
 		{
 			var mergedModName = AppState.Settings.Get("MergedModName");
@@ -170,8 +200,8 @@ namespace WitcherScriptMerger
 				AppState.Notifier.ShowMessage("The MergedModName setting isn't configured in the .config file.");
 				return null;
 			}
-			if (mergedModName.Length > 64)
-				mergedModName = mergedModName.Substring(0, 64);
+			if (mergedModName.Length > MergedModNameMaxLength)
+				mergedModName = mergedModName.Substring(0, MergedModNameMaxLength);
 			if (!mergedModName.IsAlphaNumeric() || !mergedModName.StartsWith("mod"))
 			{
 				if (!ConfirmInvalidModName(mergedModName))
