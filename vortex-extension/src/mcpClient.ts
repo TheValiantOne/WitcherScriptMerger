@@ -322,11 +322,21 @@ export class WsmMcpClient {
     return result.tools ?? [];
   }
 
-  async callTool<T = unknown>(name: string, args?: Record<string, unknown>): Promise<T> {
+  /**
+   * `timeoutMs` overrides this client's `requestTimeoutMs` for this one call. Use it for a
+   * tool whose runtime scales with the user's data rather than being bounded by round-trip
+   * latency - `merge_conflicts` above all (see `resolveAction.ts`'s
+   * `MERGE_CALL_TIMEOUT_MS`). Overriding per-call, rather than raising the whole client's
+   * `requestTimeoutMs` at `connect` time, is deliberate: that value also bounds the
+   * `initialize` handshake, and a handshake that hasn't answered in a few seconds means a
+   * WSM process that failed to start, not one that's working hard - it should fail fast
+   * instead of inheriting a merge-sized deadline.
+   */
+  async callTool<T = unknown>(name: string, args?: Record<string, unknown>, timeoutMs?: number): Promise<T> {
     const result = (await this.request('tools/call', {
       name,
       arguments: args ?? {},
-    })) as McpToolCallResult;
+    }, timeoutMs)) as McpToolCallResult;
 
     if (result.isError) {
       const message = result.content?.find((c) => c.type === 'text')?.text ?? `Tool '${name}' reported an error.`;
@@ -359,8 +369,8 @@ export class WsmMcpClient {
     return this.callTool<ScanConflictsResult>('scan_conflicts');
   }
 
-  mergeConflicts(args?: MergeConflictsArgs): Promise<MergeConflictsResult> {
-    return this.callTool<MergeConflictsResult>('merge_conflicts', args as Record<string, unknown> | undefined);
+  mergeConflicts(args?: MergeConflictsArgs, timeoutMs?: number): Promise<MergeConflictsResult> {
+    return this.callTool<MergeConflictsResult>('merge_conflicts', args as Record<string, unknown> | undefined, timeoutMs);
   }
 
   getStatus(): Promise<GetStatusResult> {
@@ -412,15 +422,16 @@ export class WsmMcpClient {
     }
   }
 
-  private request(method: string, params?: unknown): Promise<unknown> {
+  private request(method: string, params?: unknown, timeoutMs?: number): Promise<unknown> {
     const id = this.nextId++;
     const message: JsonRpcRequest = { jsonrpc: '2.0', id, method, params };
+    const deadlineMs = timeoutMs ?? this.requestTimeoutMs;
 
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`WSM MCP request '${method}' timed out after ${this.requestTimeoutMs}ms`));
-      }, this.requestTimeoutMs);
+        reject(new Error(`WSM MCP request '${method}' timed out after ${deadlineMs}ms`));
+      }, deadlineMs);
 
       this.pending.set(id, { resolve, reject, timer });
       this.writeMessage(message);
