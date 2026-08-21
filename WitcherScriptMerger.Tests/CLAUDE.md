@@ -45,6 +45,18 @@ does.
   in code review (a folder name merely *ending* in a recognized substring, e.g.
   `"ImmersiveDLC"`/`"Step1"`, must not match) — see Core's `CLAUDE.md`'s "Config-extensible
   vanilla-DLC-folder allowlist" section.
+- `FileIndex/ModFileIndexTests.cs` — `ModFileIndex.BuildIgnoredModNames`, the pure
+  function behind the mod-directory filter `BuildAsync` applies to its `"mod*"` glob.
+  Regression coverage for the merged mod being scanned as an ordinary source mod, which
+  made every re-merge cumulative rather than idempotent (duplicated insertions, and
+  occasionally a reverted edit) — see Core's `CLAUDE.md`'s "The merged mod is excluded
+  from the conflict scan" section for the mechanism and the real-install evidence. Covers
+  the exclusion happening with no `IgnoreModNames` configured at all (the bug itself), a
+  non-default `MergedModName`, user entries surviving alongside it, case-insensitive
+  de-duplication when the merged mod is already listed by hand (the pre-fix workaround),
+  a blank/unconfigured `MergedModName` adding no phantom entry, and the
+  `Paths.MergedModNameMaxLength` truncation and whitespace-trimming that keep the excluded
+  name equal to the directory name a merge actually writes.
 - `LoadOrder/CustomLoadOrderTests.cs` — `CustomLoadOrder.ProcessLine`'s tolerance for
   `mods.settings` "VK=" (VortexKey) lines, via reflection — see Core's `CLAUDE.md`'s
   "Vortex-fork parity fixes" section.

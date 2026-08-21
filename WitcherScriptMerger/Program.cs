@@ -180,11 +180,22 @@ namespace WitcherScriptMerger
 				return 1;
 			}
 
-			if (!Paths.ValidateDependencyPaths())
+			// Only the text-merge engine (DiffPlexMergeEngine, always available - it's
+			// in-process) gates starting a merge run, matching WitcherScriptMerger.Headless's
+			// own merge verb. This deliberately does NOT also require QuickBMS/wcc_lite via
+			// Paths.ValidateDependencyPaths(): those are needed only for bundle-content
+			// conflicts, and requiring them up front made `merge` refuse to run at all on an
+			// install that has nothing but flat-file (.ws/.xml) conflicts - the common case,
+			// and the only case either headless path can resolve anyway. Neither binary is
+			// committed to this repo (see the root CLAUDE.md), so a plain clone-and-run hit
+			// this every time. Bundle-category conflicts still fail gracefully, per-conflict,
+			// when actually attempted without the tooling configured - see
+			// ModFileIndex.BuildAsync and FileMerger.GetUnpackedFiles (Core).
+			if (!Paths.ValidateTextMergeDependencies())
 			{
 				Notifier.ShowError(
-					"A required dependency (QuickBMS or wcc_lite) is missing. Configure its path " +
-					"in App.config, or run without arguments once to use the GUI's dependency setup.");
+					"The configured text-merge engine is missing or misconfigured. This shouldn't " +
+					"happen with the built-in DiffPlex engine - check for a corrupted install.");
 				return 1;
 			}
 

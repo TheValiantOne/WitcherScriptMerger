@@ -149,10 +149,39 @@ namespace WitcherScriptMerger.FileIndex
 
 		private IEnumerable<string> GetIgnoredModNames()
 		{
-			var ignoredNames = AppState.Settings.Get("IgnoreModNames");
-			return ignoredNames.Split(',')
+			return BuildIgnoredModNames(
+				AppState.Settings.Get("IgnoreModNames"),
+				AppState.Settings.Get("MergedModName"));
+		}
+
+		// Split out from GetIgnoredModNames (above) as a pure function over the two raw
+		// setting values so it's unit-testable without touching AppState.Settings - see
+		// WitcherScriptMerger.Tests/CLAUDE.md's "AppState.Settings-safety constraints".
+		//
+		// The merged mod is always excluded, on top of whatever the user configured in
+		// IgnoreModNames. It is this tool's own *output*, not a source mod, but its
+		// directory name starts with "mod" and so matches BuildAsync's "mod*" glob like any
+		// other. Left in the scan it becomes a merge input alongside the very mods it was
+		// built from, and each subsequent merge re-applies those mods' edits on top of an
+		// already-merged file - inserted blocks accumulate a fresh copy per run (observed
+		// live: a single modBloodAndSteel insertion present 6 times in actor.ws, and a
+		// modCriSlowMoCR one 6 times in damageManagerProcessor.ws, after repeated merges),
+		// and a losing tiebreak can additionally revert an edit a previous run had kept.
+		// Excluding it by name is what makes a re-merge idempotent instead of cumulative.
+		public static List<string> BuildIgnoredModNames(string ignoreModNamesSetting, string mergedModNameSetting)
+		{
+			var ignoredNames = (ignoreModNamesSetting ?? string.Empty).Split(',')
 				.Where(name => !string.IsNullOrWhiteSpace(name))
-				.Select(name => name.Trim());
+				.Select(name => name.Trim())
+				.ToList();
+
+			var mergedModName = Paths.NormalizeMergedModName(mergedModNameSetting);
+			if (mergedModName != null &&
+				!ignoredNames.Any(name => name.EqualsIgnoreCase(mergedModName)))
+			{
+				ignoredNames.Add(mergedModName);
+			}
+			return ignoredNames;
 		}
 	}
 }
