@@ -597,6 +597,23 @@ namespace WitcherScriptMerger.Tests.Tools
 			Assert.True(FunctionLevelMergeEngine.ValidateWholeFileMergeOutput(baseText, oldText, baseText, oldText, "x.ws", out _));
 		}
 
+		// The hud.ws shape: one mod extends a vanilla enum with a new member while the
+		// other side leaves it untouched - the enum is a unit now, so the extending
+		// side's whole block wins instead of vanilla's gap text silently reverting it.
+		[Fact]
+		public void TryMerge_OneModAddsAnEnumMember_AdditionSurvives()
+		{
+			var baseText =
+				"enum EVis\r\n{\r\n\tHVS_None,\r\n\tHVS_Combat\r\n}\r\n\r\n" +
+				Fn("A", "\ta();\r\n");
+			var oldText = baseText.Replace("\tHVS_Combat\r\n}", "\tHVS_Combat,\r\n\tHVS_Modcrab\r\n}");
+
+			var result = Merge(baseText, oldText, baseText);
+
+			Assert.True(result.Applied);
+			Assert.Contains("HVS_Modcrab", result.MergedText);
+		}
+
 		[Fact]
 		public void HasDuplicatedLocalVarDecls_IgnoresCommentedOutDeclarations()
 		{
