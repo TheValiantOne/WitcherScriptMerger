@@ -53,7 +53,13 @@ does anything for any other game.
   whole-file merge failed but merging function-by-function succeeded), and - only on
   confirmation - spawns a second process to run the real merge and shows its result. v1
   scope, deliberately: merges every detected conflict in one pass; there's no per-file
-  selection or custom merge-order override yet.
+  selection or custom merge-order override yet. Both `merge_conflicts` calls get their own
+  ten-minute deadline (`MERGE_CALL_TIMEOUT_MS`) rather than `mcpClient.ts`'s
+  general-purpose 30s `DEFAULT_REQUEST_TIMEOUT_MS` — a merge's runtime scales with the
+  load order, and the dry-run preview costs the same as the merge it previews (it does the
+  full three-way merge and only skips the writes). The deadline is passed per call, so the
+  `initialize` handshake keeps the short default and a WSM process that fails to start
+  still fails fast.
 - **A merge-history dashboard tile** (`src/mergeHistoryDashlet.ts`): lists every merge
   WSM has already recorded (via its MCP `list_merges` tool) - relative path, which merged
   mod folder holds the result, and each source mod's recorded hash - with a manual

@@ -54,8 +54,33 @@ const ACTIVITY_NOTIFICATION_ID = 'witcherscriptmerger-vortex-resolve-conflicts-a
  *  needs both. Reusing the same already-connected client (rather than opening a third
  *  one just for this) is the entire point - see that function's own doc comment on why
  *  it takes a client instead of connecting its own. */
+/**
+ * How long to allow a single `merge_conflicts` MCP call - preview or real merge - before
+ * giving up. Ten minutes, matching `nexusDownloader.ts`'s `DEFAULT_DOWNLOAD_TIMEOUT_MS`
+ * precedent for "an operation whose runtime is the user's data, not a round trip".
+ *
+ * `mcpClient.ts`'s general-purpose `DEFAULT_REQUEST_TIMEOUT_MS` (30s) is far too short
+ * here, and this is not theoretical: on a real 274-mod load order with 44 conflicting
+ * script files, the *preview* alone blew past 30s, so `resolveScriptConflicts` reported
+ * "Failed to preview script-conflict merges" and returned at the preview stage - the real
+ * merge below it never ran at all. The user was left with an unmerged (and, because a
+ * prior deploy had already cleared it, empty) `mod0000_MergedFiles` and a game that
+ * refused to start, with ~200 script compile errors naming members the merge is supposed
+ * to add to vanilla scripts.
+ *
+ * Note this applies to the dry-run preview just as much as the real merge: a preview does
+ * the entire scan-and-three-way-merge computation and only skips the writes, so it costs
+ * essentially the same time as the merge it is previewing. Sizing this off "it's only a
+ * preview" would reintroduce the same bug.
+ *
+ * Deliberately NOT passed to `connect` as the client-wide `requestTimeoutMs`: that also
+ * bounds the `initialize` handshake, which should still fail fast when WSM can't start -
+ * see `WsmMcpClient.callTool`'s own comment on the per-call override.
+ */
+const MERGE_CALL_TIMEOUT_MS = 10 * 60 * 1000;
+
 export interface WsmMergeClient {
-  mergeConflicts(args?: MergeConflictsArgs): Promise<MergeConflictsResult>;
+  mergeConflicts(args?: MergeConflictsArgs, timeoutMs?: number): Promise<MergeConflictsResult>;
   getStatus(): Promise<GetStatusResult>;
   listMerges(): Promise<ListMergesResult>;
   close(): Promise<void>;
@@ -215,7 +240,7 @@ async function runMergeConflictsWorkflow(
   try {
     const client = await connect({ exePath, env });
     try {
-      const result = await client.mergeConflicts(args);
+      const result = await client.mergeConflicts(args, MERGE_CALL_TIMEOUT_MS);
 
       // Unit K: reconciles coexistenceGuard.ts's own "last known merge state" against
       // this extension's own just-completed workflow, using the same still-open client
@@ -273,13 +298,32 @@ async function runMergeConflictsWorkflow(
   }
 }
 
+/**
+ * A timed-out `merge_conflicts` call reads, on its own, as a bare transport error
+ * ("request 'tools/call' timed out after ...ms") that says nothing about what it means for
+ * the user's install. It means specifically that *no merge was written* - and if a deploy
+ * had already cleared the merged mod, that leaves the game unable to start, which is a far
+ * worse outcome than the wording suggests. `isTimeout` spots that case so `reportFailure`
+ * can say so, and point at the one thing that actually helps (a huge load order simply
+ * needing longer than `MERGE_CALL_TIMEOUT_MS`).
+ */
+function isTimeout(err: unknown): boolean {
+  return err instanceof Error && /timed out after \d+ms/.test(err.message);
+}
+
 function reportFailure(api: types.IExtensionApi, message: string, err: unknown): void {
   const detail = err instanceof Error ? err : String(err);
   log('warn', 'witcherscriptmerger-vortex: resolveScriptConflicts failed', {
     message,
     error: err instanceof Error ? err.message : String(err),
+    timedOut: isTimeout(err),
   });
-  api.showErrorNotification?.(message, detail);
+  const shown = isTimeout(err)
+    ? `${message}: Script Merger did not finish within ${Math.round(MERGE_CALL_TIMEOUT_MS / 60000)} minutes, so nothing was merged. `
+      + 'Your merged mod has been left untouched - if it is empty or out of date, the game may fail to start until a merge completes. '
+      + 'Very large load orders can need longer; running Script Merger directly will also do the merge.'
+    : message;
+  api.showErrorNotification?.(shown, detail);
 }
 
 /**
