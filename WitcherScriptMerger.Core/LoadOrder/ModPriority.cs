@@ -121,9 +121,19 @@ namespace WitcherScriptMerger.LoadOrder
 			if (orderOverrides == null || !orderOverrides.ContainsKey(OrderFileKey))
 				return orderOverrides;
 
+			// Preserve the source dictionary's key comparer. A plain ToDictionary would
+			// rebuild with the default ordinal one and silently undo a deliberately-installed
+			// case-insensitive comparer - WsmMcpTools.MergeConflicts builds exactly that
+			// (StringComparer.OrdinalIgnoreCase, alongside separator normalization) so a
+			// differently-cased but otherwise-correct path key isn't ignored. Dropping it here
+			// would turn those keys back into silent no-ops, but only for callers that supply
+			// a ranking - a bug that hides until the feature is used.
+			var comparer = (orderOverrides as Dictionary<string, string[]>)?.Comparer
+				?? EqualityComparer<string>.Default;
+
 			return orderOverrides
 				.Where(kvp => !string.Equals(kvp.Key, OrderFileKey, StringComparison.Ordinal))
-				.ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+				.ToDictionary(kvp => kvp.Key, kvp => kvp.Value, comparer);
 		}
 	}
 }

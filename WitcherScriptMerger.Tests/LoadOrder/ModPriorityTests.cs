@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using WitcherScriptMerger.LoadOrder;
 using Xunit;
 
@@ -161,6 +162,43 @@ namespace WitcherScriptMerger.Tests.LoadOrder
 			Assert.False(stripped.ContainsKey(ModPriority.OrderFileKey));
 			Assert.Equal(new[] { "modA", "modB" }, stripped[@"game\actor.ws"]);
 			Assert.Single(stripped);
+		}
+
+		// Regression: a plain ToDictionary rebuilds with the default ordinal comparer and
+		// silently undoes the case-insensitive one WsmMcpTools.MergeConflicts deliberately
+		// installs, turning correctly-but-differently-cased path keys into no-ops. Only
+		// reachable once a ranking is supplied, so it would have hidden until the feature
+		// was actually used.
+		[Fact]
+		public void WithoutRankingEntry_PreservesACaseInsensitiveKeyComparer()
+		{
+			var overrides = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+			{
+				[ModPriority.OrderFileKey] = new[] { "modWinner" },
+				[@"game\actor.ws"] = new[] { "modA", "modB" },
+			};
+
+			var stripped = ModPriority.WithoutRankingEntry(overrides);
+
+			Assert.True(stripped.ContainsKey(@"GAME\ACTOR.WS"));
+		}
+
+		// ...and does not IMPOSE one where the caller never asked for it: the CLI hosts build
+		// their order dictionary with the default comparer, and lookups there must stay exactly
+		// as case-sensitive as they were before a ranking existed.
+		[Fact]
+		public void WithoutRankingEntry_DoesNotImposeACaseInsensitiveComparer()
+		{
+			var overrides = new Dictionary<string, string[]>
+			{
+				[ModPriority.OrderFileKey] = new[] { "modWinner" },
+				[@"game\actor.ws"] = new[] { "modA", "modB" },
+			};
+
+			var stripped = ModPriority.WithoutRankingEntry(overrides);
+
+			Assert.False(stripped.ContainsKey(@"GAME\ACTOR.WS"));
+			Assert.True(stripped.ContainsKey(@"game\actor.ws"));
 		}
 
 		[Fact]
