@@ -78,6 +78,7 @@ describe('notifyConflictsIfChanged', () => {
     const notification = api.sendNotification.mock.calls[0][0];
     expect(notification.id).toBe(WSM_CONFLICTS_NOTIFICATION_ID);
     expect(notification.allowSuppress).toBe(true);
+    // no onResolveNow supplied here, so no action button - see the "Resolve Now" tests below
     expect(notification.actions).toEqual([]);
     expect(typeof notification.type).toBe('string');
     expect(typeof notification.message).toBe('string');
@@ -85,6 +86,59 @@ describe('notifyConflictsIfChanged', () => {
 
   it('uses a notification id distinct from the built-in game-witcher3 extension\'s "witcher3-merge"', () => {
     expect(WSM_CONFLICTS_NOTIFICATION_ID).not.toBe('witcher3-merge');
+  });
+
+  // Regression coverage for the passive version of this notification: it shipped
+  // `actions: []` and a message that said nothing about consequence. On a real install it
+  // fired ("5 unresolved script conflicts found") seconds before the user launched a game
+  // that would not start with an empty merged mod - the information was present and led
+  // nowhere. See notifyConflictsIfChanged's own doc comment.
+  it('adds a "Resolve Now" action when a resolver is supplied', () => {
+    const api = fakeApi();
+
+    notifyConflictsIfChanged(api as never, [conflict('a.ws')], () => undefined);
+
+    const notification = api.sendNotification.mock.calls[0][0];
+    expect(notification.actions).toHaveLength(1);
+    expect(notification.actions[0].title).toBe('Resolve Now');
+  });
+
+  it('runs the resolver, and dismisses the notification first, when "Resolve Now" is invoked', () => {
+    const api = fakeApi();
+    const order: string[] = [];
+    const dismiss = vi.fn(() => { order.push('dismiss'); });
+    const onResolveNow = vi.fn(() => { order.push('resolve'); });
+
+    notifyConflictsIfChanged(api as never, [conflict('a.ws')], onResolveNow);
+
+    const notification = api.sendNotification.mock.calls[0][0];
+    notification.actions[0].action(dismiss);
+
+    expect(onResolveNow).toHaveBeenCalledTimes(1);
+    // dismissed before the workflow starts, so a now-stale count can't sit there while the
+    // merge runs and then get re-shown by the post-merge scan
+    expect(order).toEqual(['dismiss', 'resolve']);
+  });
+
+  it('does not require a dismiss callback to be passed to the action', () => {
+    const api = fakeApi();
+    const onResolveNow = vi.fn();
+
+    notifyConflictsIfChanged(api as never, [conflict('a.ws')], onResolveNow);
+
+    const notification = api.sendNotification.mock.calls[0][0];
+    expect(() => notification.actions[0].action()).not.toThrow();
+    expect(onResolveNow).toHaveBeenCalledTimes(1);
+  });
+
+  it('warns that the game may fail to start, not just that conflicts exist', () => {
+    const api = fakeApi();
+
+    notifyConflictsIfChanged(api as never, [conflict('a.ws')], () => undefined);
+
+    const notification = api.sendNotification.mock.calls[0][0];
+    expect(notification.message).toContain('unresolved script conflict');
+    expect(notification.message).toContain('may fail to start');
   });
 
   it('does not re-notify on a second call with the identical conflict set (same signature)', () => {

@@ -4,7 +4,7 @@ import { isWsmToolAcquired, scanWsmConflicts } from './conflictScan';
 import { isModOrDependencyInstallActive, notifyConflictsIfChanged } from './conflictNotifications';
 import { isWitcher3Active, WITCHER3_GAME_ID } from './gating';
 import { registerMergeHistoryDashlet } from './mergeHistoryDashlet';
-import { registerResolveScriptConflictsAction } from './resolveAction';
+import { registerResolveScriptConflictsAction, resolveScriptConflicts } from './resolveAction';
 import { registerWsmStatusDashlet } from './statusTile';
 import { ensureWsmToolRegistered } from './toolAcquisition';
 
@@ -226,7 +226,21 @@ function main(context: types.IExtensionContext): boolean {
       }
 
       const conflicts = await scanWsmConflicts(context.api);
-      notifyConflictsIfChanged(context.api, conflicts);
+      // The third argument is what makes the notification actionable - see
+      // notifyConflictsIfChanged's own doc comment. Supplied here, at the composition
+      // root, because this module already imports resolveAction; conflictNotifications
+      // importing it directly would close a cycle (resolveAction -> coexistenceGuard ->
+      // conflictNotifications).
+      notifyConflictsIfChanged(context.api, conflicts, () => {
+        resolveScriptConflicts(context.api).catch((err: unknown) => {
+          // resolveScriptConflicts reports its own failures to the user; this is the
+          // same last-resort, log-only net registerResolveScriptConflictsAction uses
+          // around its own invocation.
+          log('warn', 'witcherscriptmerger-vortex: Resolve Now action failed unexpectedly', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+      });
     } catch (err) {
       log('warn', 'witcherscriptmerger-vortex: post-deploy conflict scan failed', {
         error: err instanceof Error ? err.message : String(err),
