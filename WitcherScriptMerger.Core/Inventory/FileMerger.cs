@@ -151,6 +151,11 @@ namespace WitcherScriptMerger.Inventory
 		// only the entries for paths that actually made it into summary.Merged.
 		Dictionary<string, List<string>> _functionLevelDecisionsByPath = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
 
+		// The global mod ranking for this run, pulled out of the order file's reserved
+		// "*" entry (see LoadOrder/ModPriority). Null when none was supplied, which is
+		// the normal case - every tiebreak then behaves exactly as it did before.
+		string[] _modPriority;
+
 		// Anchored at BOTH ends ("^...$") - see IsVanillaDlcBundleFolder's own comment
 		// below for why this matters: it's matched against just the extracted folder-name
 		// segment, not the full path, so a full-string match is required, not merely a
@@ -485,6 +490,12 @@ namespace WitcherScriptMerger.Inventory
 			bool dryRun = false,
 			bool overwrite = false)
 		{
+			// The ranking rides in the same order-file payload as the per-file overrides, so
+			// it reaches every host and the MCP tool without new plumbing. Split out here,
+			// once, so ResolveMergeOrder only ever sees real relative-path entries.
+			_modPriority = ModPriority.ExtractRanking(orderOverrides);
+			orderOverrides = ModPriority.WithoutRankingEntry(orderOverrides);
+
 			var summary = new HeadlessMergeSummary();
 
 			foreach (var conflict in conflicts.Where(c =>
@@ -632,7 +643,8 @@ namespace WitcherScriptMerger.Inventory
 				var hash = conflict.Mods.First(h => h.Name.EqualsIgnoreCase(orderedNames[i]));
 				var source2 = MergeSource.FromFlatFile(new FileInfo(conflict.GetModFile(orderedNames[i])), hash);
 
-				var mergedFile = MergeTextHeadless(merge, source1, source2, dryRun, DescribeAccumulated(orderedNames.Take(i)), orderedNames[i]);
+				var mergedFile = MergeTextHeadless(merge, source1, source2, dryRun, DescribeAccumulated(orderedNames.Take(i)), orderedNames[i],
+					ModPriority.Resolve(_modPriority, orderedNames.Take(i), orderedNames[i]));
 				if (mergedFile == null)
 					return false;
 				source1 = MergeSource.FromFlatFile(mergedFile, null);
@@ -689,7 +701,8 @@ namespace WitcherScriptMerger.Inventory
 				if (!GetUnpackedFiles(conflict.RelativePath, ref source1, ref source2))
 					return false;
 
-				var mergedFile = MergeTextHeadless(merge, source1, source2, dryRun, DescribeAccumulated(orderedNames.Take(i)), orderedNames[i]);
+				var mergedFile = MergeTextHeadless(merge, source1, source2, dryRun, DescribeAccumulated(orderedNames.Take(i)), orderedNames[i],
+					ModPriority.Resolve(_modPriority, orderedNames.Take(i), orderedNames[i]));
 				if (mergedFile == null)
 					return false;
 				source1 = MergeSource.FromFlatFile(mergedFile, null);
@@ -773,7 +786,8 @@ namespace WitcherScriptMerger.Inventory
 				.ToArray();
 		}
 
-		FileInfo MergeTextHeadless(Merge merge, MergeSource source1, MergeSource source2, bool dryRun, string oldDescription = null, string newDescription = null)
+		FileInfo MergeTextHeadless(Merge merge, MergeSource source1, MergeSource source2, bool dryRun, string oldDescription = null, string newDescription = null,
+			PreferredSide preferredSide = PreferredSide.None)
 		{
 			ProgressInfo.CurrentAction = $"Merging {source1.Name} && {source2.Name}";
 
@@ -786,7 +800,7 @@ namespace WitcherScriptMerger.Inventory
 			// review before it shipped (see docs/decisions/kdiff3-retirement.md).
 			var result = _mergeEngine.MergeHeadless(
 				source1, source2, _vanillaFile, _outputPath, openConflictMarkers: !dryRun,
-				oldDescription: oldDescription, newDescription: newDescription);
+				oldDescription: oldDescription, newDescription: newDescription, preferredSide: preferredSide);
 
 			if (_mergeEngine.LastFunctionLevelDecisions.Count > 0)
 			{

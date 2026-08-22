@@ -10,6 +10,7 @@ using DiffPlex.Chunkers;
 using DiffPlex.Model;
 using WitcherScriptMerger.FileIndex;
 using WitcherScriptMerger.Inventory;
+using WitcherScriptMerger.LoadOrder;
 
 namespace WitcherScriptMerger.Tools
 {
@@ -159,7 +160,8 @@ namespace WitcherScriptMerger.Tools
 			string outputPath,
 			bool openConflictMarkers = true,
 			string oldDescription = null,
-			string newDescription = null)
+			string newDescription = null,
+			PreferredSide preferredSide = PreferredSide.None)
 		{
 			LastFunctionLevelDecisions = Array.Empty<string>();
 
@@ -233,7 +235,7 @@ namespace WitcherScriptMerger.Tools
 				// merge even when the whole-file 3-way diff hits this bug. Only
 				// attempted for .ws files - the extractor is WitcherScript-specific and
 				// has no notion of XML structure.
-				if (TryFunctionLevelRescue(baseText, oldText, newText, source1, source2, outputPath, oldDescription, newDescription, openConflictMarkers))
+				if (TryFunctionLevelRescue(baseText, oldText, newText, source1, source2, outputPath, oldDescription, newDescription, openConflictMarkers, preferredSide))
 					return MergeEngineResult.AutoSolved;
 
 				// DiffPlex's own diff algorithm produced output it isn't safe to trust
@@ -287,7 +289,7 @@ namespace WitcherScriptMerger.Tools
 					"DiffPlex ThreeWayDiffer bug (see CLAUDE.md). Falling back to the function-level merge.",
 					"Merge Output Rejected", NotifyButtons.OK, DialogIcon.Warning);
 
-				if (TryFunctionLevelRescue(baseText, oldText, newText, source1, source2, outputPath, oldDescription, newDescription, openConflictMarkers))
+				if (TryFunctionLevelRescue(baseText, oldText, newText, source1, source2, outputPath, oldDescription, newDescription, openConflictMarkers, preferredSide))
 					return MergeEngineResult.AutoSolved;
 
 				// Same policy as the DiffAlgorithmException branch above, for the same
@@ -308,7 +310,7 @@ namespace WitcherScriptMerger.Tools
 			// FunctionLevelMergeEngine's own comment for why this is a fallback that
 			// only ever activates where the whole-file merge has already failed, never
 			// a parallel code path for merges that would have succeeded anyway.
-			if (TryFunctionLevelRescue(baseText, oldText, newText, source1, source2, outputPath, oldDescription, newDescription, openConflictMarkers))
+			if (TryFunctionLevelRescue(baseText, oldText, newText, source1, source2, outputPath, oldDescription, newDescription, openConflictMarkers, preferredSide))
 				return MergeEngineResult.AutoSolved;
 
 			// Never write conflict markers to outputPath itself: FileMerger's headless
@@ -455,7 +457,7 @@ namespace WitcherScriptMerger.Tools
 		bool TryFunctionLevelRescue(
 			string baseText, string oldText, string newText,
 			FileMerger.MergeSource source1, FileMerger.MergeSource source2, string outputPath,
-			string oldDescription, string newDescription, bool openConflictMarkers)
+			string oldDescription, string newDescription, bool openConflictMarkers, PreferredSide preferredSide)
 		{
 			// ModFile.IsScript, not a locally reinvented extension check - the same
 			// vocabulary every other file-category dispatch in Core uses for this exact
@@ -470,7 +472,7 @@ namespace WitcherScriptMerger.Tools
 				result = FunctionLevelMergeEngine.TryMerge(
 					baseText, oldText, newText,
 					source1.Name, source2.Name,
-					oldDescription ?? source1.Name, newDescription ?? source2.Name);
+					oldDescription ?? source1.Name, newDescription ?? source2.Name, preferredSide);
 			}
 			catch (ScriptUnitExtractor.ExtractionException)
 			{

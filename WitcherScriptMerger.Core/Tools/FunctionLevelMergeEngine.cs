@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using DiffPlex;
+using WitcherScriptMerger.LoadOrder;
 
 namespace WitcherScriptMerger.Tools
 {
@@ -53,10 +54,15 @@ namespace WitcherScriptMerger.Tools
 	// independently before reassembling.
 	public static class FunctionLevelMergeEngine
 	{
+		// preferredSide is the caller's mod-ranking verdict for this pairwise step (see
+		// LoadOrder/ModPriority). Defaulted so every existing caller and test is unaffected,
+		// and only consulted at the whole-function tiebreak - a ranking never overrides a
+		// clean, genuinely-merged result.
 		public static FunctionLevelMergeResult TryMerge(
 			string baseText, string oldText, string newText,
 			string oldMarkerLabel, string newMarkerLabel,
-			string oldDescription, string newDescription)
+			string oldDescription, string newDescription,
+			PreferredSide preferredSide = PreferredSide.None)
 		{
 			ScriptDocument baseDoc, oldDoc, newDoc;
 			try
@@ -137,7 +143,7 @@ namespace WitcherScriptMerger.Tools
 					baseDoc.Units[i],
 					oldAlignment.MatchedSideIndex[i].HasValue ? oldDoc.Units[oldAlignment.MatchedSideIndex[i].Value].FullText : null,
 					newAlignment.MatchedSideIndex[i].HasValue ? newDoc.Units[newAlignment.MatchedSideIndex[i].Value].FullText : null,
-					oldMarkerLabel, newMarkerLabel, oldDescription, newDescription, decisions);
+					oldMarkerLabel, newMarkerLabel, oldDescription, newDescription, decisions, preferredSide);
 			}
 
 			var merged = new StringBuilder();
@@ -288,7 +294,7 @@ namespace WitcherScriptMerger.Tools
 		static string ResolveUnit(
 			ScriptUnit baseUnit, string oldText, string newText,
 			string oldMarkerLabel, string newMarkerLabel, string oldDescription, string newDescription,
-			List<string> decisions)
+			List<string> decisions, PreferredSide preferredSide)
 		{
 			var baseText = baseUnit.FullText;
 
@@ -355,6 +361,28 @@ namespace WitcherScriptMerger.Tools
 					$"{baseUnit.DescribeKind()} {baseUnit.Name}: the fine-grained 3-way merge silently duplicated " +
 					$"local variable '{dupLocal}' (a known DiffPlex failure mode) - used the whole-function " +
 					"tiebreak below instead of the spliced result.");
+			}
+
+			// A user-supplied mod ranking outranks the distinctness heuristic. Distinctness
+			// is a guess at which side "did more" and has no way to know the user simply
+			// wants a particular mod's version of a function to survive; a ranking is that
+			// user telling us directly. Only consulted here, at the point the engine was
+			// already going to pick a whole side - never anywhere that would discard a
+			// clean, genuinely-merged result.
+			if (preferredSide == PreferredSide.New)
+			{
+				decisions.Add(
+					$"{baseUnit.DescribeKind()} {baseUnit.Name}: kept {newDescription}'s version because the configured " +
+					$"mod ranking prefers it over {oldDescription}, discarding {oldDescription}'s conflicting change here.");
+				return newText;
+			}
+
+			if (preferredSide == PreferredSide.Old)
+			{
+				decisions.Add(
+					$"{baseUnit.DescribeKind()} {baseUnit.Name}: kept {oldDescription}'s version because the configured " +
+					$"mod ranking prefers it over {newDescription}, discarding {newDescription}'s conflicting change here.");
+				return oldText;
 			}
 
 			var oldDistinctness = ComputeDistinctness(baseText, oldText);
