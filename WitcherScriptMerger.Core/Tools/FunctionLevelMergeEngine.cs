@@ -702,8 +702,25 @@ namespace WitcherScriptMerger.Tools
 		// Inputs that don't extract cleanly make the judgement impossible - returns
 		// true (trust the merge, as before this guard existed) - EXCEPT when the inputs
 		// extract and the OUTPUT doesn't, which is itself corruption.
+		// Names the side a violation message is talking about. Falls back to "one mod"/"the
+		// other mod" when the caller supplied no descriptions (tests, and any future caller
+		// that has none) - the message stays true, just less specific.
+		static string DescribeSide(bool isOldSide, string oldDescription, string newDescription)
+		{
+			var description = isOldSide ? oldDescription : newDescription;
+			if (!string.IsNullOrWhiteSpace(description))
+				return description;
+			return isOldSide ? "one mod" : "the other mod";
+		}
+
+		// oldDescription/newDescription are optional purely so the violation text can name
+		// the mod that lacks a vanilla declaration - the single most useful thing to tell a
+		// user here, since the fix is almost always "that mod is built for an older game
+		// version". Optional rather than required so existing callers and tests are
+		// unaffected.
 		public static bool ValidateWholeFileMergeOutput(
-			string baseText, string oldText, string newText, string mergedText, string outputPath, out string violation)
+			string baseText, string oldText, string newText, string mergedText, string outputPath, out string violation,
+			string oldDescription = null, string newDescription = null)
 		{
 			violation = null;
 			if (!FileIndex.ModFile.IsScript(outputPath))
@@ -764,17 +781,50 @@ namespace WitcherScriptMerger.Tools
 				}
 			}
 
+			// Every unit present in EITHER input must survive. Only a name both sides
+			// dropped may legitimately disappear - and such a name never reaches this loop,
+			// since it iterates the two inputs' own keys.
+			//
+			// The vanilla-retention case (in base, kept by one side, absent from the other)
+			// used to be excluded here, and that exclusion caused real, silent damage. A mod
+			// shipping a whole-file copy taken from an OLDER game build simply doesn't
+			// contain declarations the current vanilla added since - which a three-way diff
+			// cannot tell apart from "this mod deleted it", so the deletion won and the
+			// merged file shipped without it. Observed live on a next-gen install: a
+			// pre-4.0 copy of r4Game.ws erased `CR4Game.OnHDRChangedEvent` (an
+			// engine-called event that calls GetGuiManager().OnHDRChanged()) from the merged
+			// output; the merge reported success, the scripts compiled, and the game then
+			// rendered its menu background with no main menu at all. Two more mods did the
+			// same thing in the same load order - mapMenu.ws lost OnFiltersChanged /
+			// SetInitialFilters / m_fxSetInitialFilters, exploration.ws lost CheckVector /
+			// DoHorseKick / OnHorseKick plus five member variables. In every case the
+			// declaration was present in vanilla AND in the other contributing mod.
+			//
+			// Treating this as a violation deliberately reclassifies a genuine
+			// "one mod deletes a vanilla function, the other keeps it" case as a conflict
+			// rather than a silent deletion. That is the right trade: whole-function
+			// deletion by a mod is rare, silently losing engine-called vanilla code is
+			// catastrophic and near-impossible to diagnose from the symptom, and a violation
+			// here doesn't skip the file outright - it routes to the function-level rescue
+			// first, exactly like every other violation.
 			foreach (var name in oldCounts.Keys.Concat(newCounts.Keys).Distinct())
 			{
 				var inOld = At(oldCounts, name) > 0;
 				var inNew = At(newCounts, name) > 0;
 				var inBase = At(baseCounts, name) > 0;
-				var required = (inOld && inNew) || (inOld && !inBase) || (inNew && !inBase);
-				if (required && At(mergedCounts, name) == 0)
-				{
-					violation = $"'{name}' is present in {(inOld && inNew ? "both inputs" : "an input that inserted it")} but missing from the merged output (lost)";
-					return false;
-				}
+				if (At(mergedCounts, name) != 0)
+					continue;
+
+				if (inOld && inNew)
+					violation = $"'{name}' is present in both inputs but missing from the merged output (lost)";
+				else if (!inBase)
+					violation = $"'{name}' is present in an input that inserted it but missing from the merged output (lost)";
+				else
+					violation =
+						$"'{name}' is declared in the vanilla file and kept by {DescribeSide(inOld, oldDescription, newDescription)}, " +
+						$"but is missing from the merged output (lost) - {DescribeSide(!inOld, oldDescription, newDescription)} has no copy of it, " +
+						"which usually means that mod ships a whole-file copy taken from an older game build";
+				return false;
 			}
 
 			// Line-level: DiffPlex's silent duplication can strike INSIDE a function

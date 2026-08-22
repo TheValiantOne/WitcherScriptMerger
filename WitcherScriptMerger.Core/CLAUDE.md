@@ -523,6 +523,31 @@ defects the original design produced on a live install):
   against the real broken output preserved in `docs/bugs/artifacts/` (gate fails it on
   exactly the orphaned accessor the game rejected) with zero false positives across
   real vanilla `r4Player.ws`/`player.ws`/`actor.ws`/`baseEffect.ws`.
+- **A vanilla declaration kept by either side must survive the whole-file merge**
+  (`ValidateWholeFileMergeOutput`'s lost-unit check). This extends the function-level
+  engine's own long-standing "a deletion never silently overrides a surviving edit"
+  principle (above) to the whole-file path, which did not previously enforce it: a unit
+  present in vanilla, kept by one input and absent from the other used to be allowed to
+  vanish, on the reading that it was "a legitimate deletion propagating". From text alone
+  that shape is **indistinguishable** from the case that actually causes damage — a mod
+  shipping a whole-file copy taken from an older game build simply has no copy of
+  declarations vanilla added since, and a three-way diff reads that absence as a deletion.
+  Observed live on a next-gen install: a pre-4.0 `r4Game.ws` erased
+  `CR4Game.OnHDRChangedEvent` (engine-called, calls `GetGuiManager().OnHDRChanged()`) from
+  the merged output; the merge reported success, the scripts compiled, and the game
+  rendered its menu background with **no main menu at all**. Two other mods in the same
+  load order did the same to `mapMenu.ws` (`OnFiltersChanged`, `SetInitialFilters`,
+  `m_fxSetInitialFilters`) and `exploration.ws` (`CheckVector`, `DoHorseKick`,
+  `OnHorseKick` plus five member variables) — in every case the declaration was present in
+  vanilla *and* in the other contributing mod. Since the two cases can't be told apart,
+  this errs toward the survivable one: the deliberate-deletion mod loses its deletion,
+  rather than an engine-called vanilla event disappearing with nothing saying so. A
+  violation doesn't skip the file — it routes to the function-level rescue first, like
+  every other violation, and that engine's own edit-survives-competing-deletion policy
+  usually keeps the unit. `ValidateWholeFileMergeOutput` takes optional
+  `oldDescription`/`newDescription` purely so the message can **name the mod that lacks
+  the declaration**, since the fix is almost always "that mod is built for an older game
+  version". Only a name *both* sides dropped may still disappear.
 - A gap that still exists between two intact units is compared as before —
   whitespace-tolerant, deliberately NOT comment-stripped — producing a `Decisions` note
   when content differs; vanilla's gap text still wins at non-insertion slots.

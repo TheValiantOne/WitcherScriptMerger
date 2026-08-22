@@ -268,7 +268,8 @@ namespace WitcherScriptMerger.Tools
 				// from the ORIGINAL inputs, sidestepping the corrupted output
 				// entirely), then fall through to the conflict-marker sidecar.
 				if (FunctionLevelMergeEngine.ValidateWholeFileMergeOutput(
-					baseText, oldText, newText, result.MergedText, outputPath, out var invariantViolation))
+					baseText, oldText, newText, result.MergedText, outputPath, out var invariantViolation,
+					oldDescription ?? source1.Name, newDescription ?? source2.Name))
 				{
 					// A prior attempt at this same conflict may have left a sidecar
 					// marker file behind (see below) - if this attempt now auto-solves

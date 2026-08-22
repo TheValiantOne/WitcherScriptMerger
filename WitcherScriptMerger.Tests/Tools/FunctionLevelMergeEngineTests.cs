@@ -554,15 +554,99 @@ namespace WitcherScriptMerger.Tests.Tools
 			Assert.Contains("lost", violation);
 		}
 
+		// DELIBERATE REVERSAL of this test's previous expectation, which asserted that a
+		// vanilla declaration present in one input and absent from the other could legitimately
+		// vanish from the merged output ("a legitimate deletion propagating").
+		//
+		// That shape is indistinguishable, from text alone, from the failure that motivated this
+		// change: a mod shipping a whole-file copy taken from an OLDER game build has no copy of
+		// declarations vanilla added since, and a three-way diff reads that absence as a
+		// deletion. Observed live on a next-gen install - a pre-4.0 r4Game.ws erased
+		// CR4Game.OnHDRChangedEvent (engine-called, calls GetGuiManager().OnHDRChanged()) from
+		// the merged output; the merge reported success, the scripts compiled, and the game
+		// rendered its menu background with no main menu. Two other mods in the same load order
+		// did the same to mapMenu.ws and exploration.ws.
+		//
+		// Since the two cases cannot be told apart, this errs toward the survivable one. A
+		// violation does not skip the file - it routes to the function-level rescue first, which
+		// re-merges per unit and has its own edit-survives-competing-deletion policy. The cost is
+		// that a deliberate whole-function deletion no longer propagates silently; the benefit is
+		// that engine-called vanilla code can no longer disappear with nothing saying so.
 		[Fact]
-		public void ValidateWholeFileMergeOutput_AllowsALegitimateDeletionPropagating()
+		public void ValidateWholeFileMergeOutput_VanillaDeclarationKeptByOneSideButLost_IsAViolation()
 		{
 			var baseText = Fn("A", "\ta();\r\n") + "\r\n" + Fn("B", "\tb();\r\n");
 			var oldText = baseText;
 			var newText = Fn("A", "\ta();\r\n");
 			var mergedText = Fn("A", "\ta();\r\n");
 
+			Assert.False(FunctionLevelMergeEngine.ValidateWholeFileMergeOutput(baseText, oldText, newText, mergedText, "x.ws", out var violation));
+			Assert.Contains("lost", violation);
+			Assert.Contains("older game build", violation);
+		}
+
+		// The one loss that stays legitimate: neither input has it any more, so nothing is being
+		// discarded. Such a name never even reaches the check, since it iterates the two inputs'
+		// own keys - this pins that down.
+		[Fact]
+		public void ValidateWholeFileMergeOutput_VanillaDeclarationDroppedByBothSides_IsAllowed()
+		{
+			var baseText = Fn("A", "\ta();\r\n") + "\r\n" + Fn("B", "\tb();\r\n");
+			var oldText = Fn("A", "\ta();\r\n");
+			var newText = Fn("A", "\ta();\r\n");
+			var mergedText = Fn("A", "\ta();\r\n");
+
 			Assert.True(FunctionLevelMergeEngine.ValidateWholeFileMergeOutput(baseText, oldText, newText, mergedText, "x.ws", out _));
+		}
+
+		// The most useful thing this message can carry is WHICH mod lacks the declaration,
+		// because the fix is almost always "that mod is built for an older game version".
+		[Fact]
+		public void ValidateWholeFileMergeOutput_NamesTheModThatLacksTheVanillaDeclaration()
+		{
+			var baseText = Fn("A", "\ta();\r\n") + "\r\n" + Fn("B", "\tb();\r\n");
+			var oldText = baseText;
+			var newText = Fn("A", "\ta();\r\n");
+			var mergedText = Fn("A", "\ta();\r\n");
+
+			Assert.False(FunctionLevelMergeEngine.ValidateWholeFileMergeOutput(
+				baseText, oldText, newText, mergedText, "x.ws", out var violation, "modKeepsIt", "modStale"));
+
+			Assert.Contains("kept by modKeepsIt", violation);
+			Assert.Contains("modStale has no copy of it", violation);
+		}
+
+		// Same case with the stale side reversed, so the message cannot be passing by hardcoding
+		// one side.
+		[Fact]
+		public void ValidateWholeFileMergeOutput_NamesTheStaleModWhicheverSideItIs()
+		{
+			var baseText = Fn("A", "\ta();\r\n") + "\r\n" + Fn("B", "\tb();\r\n");
+			var oldText = Fn("A", "\ta();\r\n");
+			var newText = baseText;
+			var mergedText = Fn("A", "\ta();\r\n");
+
+			Assert.False(FunctionLevelMergeEngine.ValidateWholeFileMergeOutput(
+				baseText, oldText, newText, mergedText, "x.ws", out var violation, "modStale", "modKeepsIt"));
+
+			Assert.Contains("kept by modKeepsIt", violation);
+			Assert.Contains("modStale has no copy of it", violation);
+		}
+
+		// Descriptions are optional - without them the message must still be true, just less
+		// specific.
+		[Fact]
+		public void ValidateWholeFileMergeOutput_WithoutDescriptions_StillDescribesBothSides()
+		{
+			var baseText = Fn("A", "\ta();\r\n") + "\r\n" + Fn("B", "\tb();\r\n");
+			var oldText = baseText;
+			var newText = Fn("A", "\ta();\r\n");
+			var mergedText = Fn("A", "\ta();\r\n");
+
+			Assert.False(FunctionLevelMergeEngine.ValidateWholeFileMergeOutput(baseText, oldText, newText, mergedText, "x.ws", out var violation));
+
+			Assert.Contains("kept by one mod", violation);
+			Assert.Contains("the other mod has no copy of it", violation);
 		}
 
 		[Fact]

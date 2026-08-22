@@ -32,7 +32,11 @@ does.
   most-distinct-from-vanilla tiebreak (including its deterministic tie-break and a
   scaled-down `DiffAlgorithmException` case), edit-survives-competing-deletion, insertion
   reconciliation (including the same-name-different-body decline case), and gap-comment
-  detection.
+  detection. Also `ValidateWholeFileMergeOutput`'s lost-unit check, including the
+  deliberately reversed expectation for a vanilla declaration kept by one side and
+  absent from the other (now a violation, not "a legitimate deletion propagating" -
+  see Core's `CLAUDE.md`), that a name dropped by *both* sides is still allowed to go,
+  and that the violation message names the stale mod on whichever side it is.
 - `Inventory/FileMergerTests.cs` — `FileMerger.IsVanillaDlcBundleFolder`: known vanilla
   DLC-folder names, case-insensitivity, and non-matches (including anchoring) — see
   Core's `CLAUDE.md`'s "Vortex-fork parity fixes" section. Also covers the two-arg

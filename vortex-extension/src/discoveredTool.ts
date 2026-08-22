@@ -60,15 +60,26 @@ export function buildWsmDiscoveredTool(options: WsmDiscoveredToolOptions): types
     // requiredFiles (which drives that scan) is deliberately empty.
     requiredFiles: [],
     executable: () => path.basename(options.exePath),
-    // No default `parameters`: WitcherScriptMerger.Headless.exe with no args prints
-    // usage and exits 1 rather than doing anything useful (see
-    // WitcherScriptMerger.Headless/CLAUDE.md's routing section) - there's no verb that's
-    // meaningfully "the default" for a human clicking this tile in Vortex's Tools
-    // dashboard (`mcp` mode just sits waiting for JSON-RPC on stdin, which looks hung to
-    // a human; `merge` needs GameDirectory/ModsDirectory already configured). Documented
-    // limitation, not an oversight - a later unit driving this programmatically
-    // (mcpClient.ts, or a future one-shot `merge` CLI invocation) always passes its own
-    // explicit `args`, bypassing this default entirely.
+    // `parameters: ['merge', '--overwrite']`: WitcherScriptMerger.Headless.exe with no
+    // args just prints usage and exits 1 (see WitcherScriptMerger.Headless/CLAUDE.md's
+    // routing section) - a human clicking this tile in Vortex's Tools dashboard used to
+    // get exactly that and nothing else, which looked like the tool silently did
+    // nothing (observed live: a genuine unresolved script conflict stayed unresolved
+    // after "running" this tile). `merge` is the one verb that's actually useful for a
+    // direct click; `--overwrite` mirrors resolveScriptConflicts.ts's own real-merge
+    // call so a plain Tools-dashboard launch resolves conflicts the same way the
+    // "Resolve Script Conflicts" action's confirmed merge does (including re-merging
+    // stale output), not a weaker subset of it. `GameDirectory`/`ModsDirectory` still
+    // come from `environment` below (the same `WSM_*` overrides `resolveScriptConflicts`
+    // passes), so this works unattended without the user having configured WSM's own
+    // App.config by hand. The one real difference from "Resolve Script Conflicts": no
+    // preview/confirmation dialog first, and results only surface via the process exit
+    // code/console output rather than a Vortex dialog - Vortex's discovered-tool
+    // launcher (`api.runExecutable`) has no callback hook to reuse that dialog flow
+    // itself (re-confirmed against `docs/vortex-extension-design.md` section 1: there is
+    // no `context.registerTool` API, `addDiscoveredTool` + a fixed executable/parameters
+    // pair is the entire mechanism).
+    parameters: ['merge', '--overwrite'],
     environment: options.environment ?? {},
     path: options.exePath,
     hidden: false,
