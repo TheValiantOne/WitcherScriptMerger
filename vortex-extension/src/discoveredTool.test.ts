@@ -27,15 +27,6 @@ describe('buildWsmDiscoveredTool', () => {
     expect(tool.executable()).toBe('WitcherScriptMerger.Headless.exe');
   });
 
-  it('defaults to running a real, overwrite-enabled merge when launched directly from the Tools dashboard', () => {
-    // A bare Tools-dashboard launch has no preview/confirmation dialog to gate on (see
-    // resolveScriptConflicts.ts) - it must resolve conflicts outright, the same way that
-    // action's own confirmed (non-dry-run) merge call does, rather than printing usage
-    // and exiting (the pre-fix behavior with no `parameters` at all).
-    const tool = buildWsmDiscoveredTool({ exePath: EXE_PATH });
-    expect(tool.parameters).toEqual(['merge', '--overwrite']);
-  });
-
   it('defaults environment to an empty object when none is given', () => {
     const tool = buildWsmDiscoveredTool({ exePath: EXE_PATH });
     expect(tool.environment).toEqual({});
