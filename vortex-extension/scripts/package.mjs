@@ -39,10 +39,12 @@ const INFO_JSON = path.join(ROOT, 'info.json');
 const RELEASE_DIR = path.join(ROOT, 'release');
 
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
-// The staged folder's own name - not read from info.json (which declares no explicit
-// "id" field; @nexusmods/vortex-api's own IExtension typing marks `id` optional), so
-// there's no single canonical extension id to derive this from. package.json's own
-// `name` is used instead, matching this repo's git history/npm package identity.
+// The staged folder's own name. info.json now declares an explicit "id"
+// (@nexusmods/vortex-api's IExtension typing marks it optional, but Vortex uses it as
+// the extension's stable identity), and the two are asserted equal below - so this could
+// read from either. It stays on package.json's `name` because that's also what the zip
+// filename and this repo's npm package identity use; the assertion is what keeps them
+// from drifting apart.
 const stageName = pkg.name;
 const stageDir = path.join(RELEASE_DIR, stageName);
 
@@ -75,6 +77,14 @@ if (info.version !== pkg.version) {
 // releases, which makes an update look like a different extension.
 if (!info.id) {
   console.error(`info.json is missing an 'id' - Vortex needs a stable extension id that doesn't change between releases.`);
+  process.exit(1);
+}
+if (info.id !== pkg.name) {
+  console.error(
+    `Identity mismatch: package.json name is '${pkg.name}' but info.json id is '${info.id}'. ` +
+    `The staged folder and zip are named from the former while Vortex identifies the extension ` +
+    `by the latter, so a divergence installs under one name and registers under another.`,
+  );
   process.exit(1);
 }
 
