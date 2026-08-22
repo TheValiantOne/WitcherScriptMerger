@@ -55,6 +55,29 @@ if (!fs.existsSync(INFO_JSON)) {
   process.exit(1);
 }
 
+// package.json and info.json carry the version independently, and nothing used to
+// reconcile them: the produced zip is named from package.json's version while the
+// manifest Vortex actually reads is info.json's, so a one-sided bump ships an archive
+// whose filename disagrees with the version Vortex reports. Fail the package step
+// rather than emit that.
+const info = JSON.parse(fs.readFileSync(INFO_JSON, 'utf8'));
+if (info.version !== pkg.version) {
+  console.error(
+    `Version mismatch: package.json says '${pkg.version}' but info.json says '${info.version}'. ` +
+    `The zip is named from package.json while Vortex reads info.json, so these must agree - ` +
+    `update both before packaging.`,
+  );
+  process.exit(1);
+}
+
+// The id is what Vortex uses as the extension's stable identity. Without it, identity
+// and the installed folder name derive from the archive filename and can change between
+// releases, which makes an update look like a different extension.
+if (!info.id) {
+  console.error(`info.json is missing an 'id' - Vortex needs a stable extension id that doesn't change between releases.`);
+  process.exit(1);
+}
+
 fs.rmSync(RELEASE_DIR, { recursive: true, force: true });
 fs.mkdirSync(stageDir, { recursive: true });
 
@@ -115,6 +138,8 @@ console.log(`\nPackaged: ${zipPath}`);
 console.log(`Staged (unzipped) folder: ${stageDir}`);
 console.log(
   `\nManual install: extract the zip (or copy the staged folder's contents) so they land directly in\n` +
-    `  %APPDATA%\\Vortex\\plugins\\${stageName}\\\n` +
+    `  <Vortex userData>\\plugins\\${stageName}\\\n` +
+    `where <Vortex userData> is %APPDATA%\\Vortex for a default per-user install, or\n` +
+    `C:\\ProgramData\\vortex when Vortex is set up with shared/multi-user storage.\n` +
     `i.e. that folder should directly contain index.js and info.json, not a nested subfolder.`,
 );

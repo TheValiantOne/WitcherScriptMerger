@@ -130,7 +130,11 @@ bundling/redistributing anything itself:
   wcc_lite's) - the status tile only detects an existing local install or links to
   QuickBMS's own homepage, mirroring WSM's own GUI for this exact dependency.
 
-## Install (manual - not yet published anywhere)
+## Install (manual)
+
+> A `companion-0.1.0` GitHub release exists; this section covers installing it (or a
+> locally-built zip) by hand. The extension is not yet listed in Vortex's in-app
+> extension browser.
 
 ```
 cd vortex-extension
@@ -149,7 +153,12 @@ To install: extract that zip's contents (or copy the staged folder's contents) s
 `index.js` and `info.json` land directly inside
 
 ```
-%APPDATA%\Vortex\plugins\witcherscriptmerger-vortex\
+<Vortex userData>\plugins\witcherscriptmerger-vortex\n
+where <Vortex userData> depends on how Vortex was installed:
+  %APPDATA%\Vortex              (default, per-user)
+  C:\ProgramDataortex         (shared/multi-user storage)
+
+If unsure, Vortex's own Settings -> Mods page shows the paths it is using.
 ```
 
 The folder name under `plugins\` is arbitrary - `info.json` declares no explicit `id`
