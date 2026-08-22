@@ -118,7 +118,7 @@ function fakeConnect(outcomes: Array<{ result?: MergeConflictsResult; error?: Er
   const calls: WsmMcpClientOptions[] = [];
   // Every mergeConflicts invocation, so a test can assert what deadline the call was
   // given - see the MERGE_CALL_TIMEOUT_MS tests below.
-  const mergeCalls: Array<{ args: unknown; timeoutMs: number | undefined }> = [];
+  const mergeCalls: Array<{ args: unknown; timeoutMs: number | null | undefined }> = [];
   let closedCount = 0;
   let callIndex = 0;
 
@@ -126,7 +126,7 @@ function fakeConnect(outcomes: Array<{ result?: MergeConflictsResult; error?: Er
     calls.push(options);
     const outcome = outcomes[callIndex++];
     return {
-      mergeConflicts: async (args?: unknown, timeoutMs?: number) => {
+      mergeConflicts: async (args?: unknown, timeoutMs?: number | null) => {
         mergeCalls.push({ args, timeoutMs });
         if (outcome.error) {
           throw outcome.error;
@@ -357,23 +357,23 @@ describe('resolveScriptConflicts', () => {
   // mcpClient.ts's general-purpose 30s DEFAULT_REQUEST_TIMEOUT_MS, the dry-run preview
   // exceeded it, and resolveScriptConflicts bailed at the preview stage - the real merge
   // never ran, leaving an unmerged mod0000_MergedFiles and a game that wouldn't start.
-  // Both calls must carry the long, merge-sized deadline: a preview does the same
-  // scan-and-merge computation as the real merge and only skips the writes, so sizing it
-  // as if it were cheap is precisely what broke.
-  const TEN_MINUTES_MS = 10 * 60 * 1000;
-
-  it('gives the dry-run preview a merge-sized timeout, not the general-purpose request default', async () => {
+  //
+  // Both calls must now carry NO deadline (null): a merge's runtime is the user's load
+  // order, so any wall-clock limit can only ever fire on a merge that is working normally.
+  // A preview is not the cheap one either - it does the same scan-and-merge computation and
+  // only skips the writes.
+  it('gives the dry-run preview no deadline, not the general-purpose request default', async () => {
     const { api } = fakeApi({ toolPath: 'C:\\wsm\\WitcherScriptMerger.Headless.exe' });
     const { connect, mergeCalls } = fakeConnect([{ result: mergeResult() }]);
 
     await resolveScriptConflicts(api, { connect });
 
     expect(mergeCalls).toHaveLength(1);
-    expect(mergeCalls[0].timeoutMs).toBe(TEN_MINUTES_MS);
+    expect(mergeCalls[0].timeoutMs).toBeNull();
     expect((mergeCalls[0].args as { dryRun?: boolean }).dryRun).toBe(true);
   });
 
-  it('gives the real merge the same merge-sized timeout as the preview', async () => {
+  it('gives the real merge no deadline either', async () => {
     const { api } = fakeApi({
       toolPath: 'C:\\wsm\\WitcherScriptMerger.Headless.exe',
       dialogResponses: [{ action: 'Merge Now' }],
@@ -385,14 +385,14 @@ describe('resolveScriptConflicts', () => {
     await resolveScriptConflicts(api, { connect });
 
     expect(mergeCalls).toHaveLength(2);
-    expect(mergeCalls[0].timeoutMs).toBe(TEN_MINUTES_MS);
-    expect(mergeCalls[1].timeoutMs).toBe(TEN_MINUTES_MS);
+    expect(mergeCalls[0].timeoutMs).toBeNull();
+    expect(mergeCalls[1].timeoutMs).toBeNull();
     expect((mergeCalls[1].args as { dryRun?: boolean }).dryRun).toBe(false);
   });
 
-  // The long deadline belongs to the merge call alone. connect() must NOT be handed it as
+  // The unbounded wait belongs to the merge call alone. connect() must NOT be handed it as
   // the client-wide requestTimeoutMs, which also bounds the initialize handshake - a WSM
-  // process that fails to start should still fail fast rather than hang for ten minutes.
+  // process that fails to start must still fail fast rather than hang forever.
   it('does not widen the client-wide request timeout (the initialize handshake must still fail fast)', async () => {
     const { api } = fakeApi({ toolPath: 'C:\\wsm\\WitcherScriptMerger.Headless.exe' });
     const { connect, calls } = fakeConnect([{ result: mergeResult() }]);
@@ -402,11 +402,11 @@ describe('resolveScriptConflicts', () => {
     expect(calls[0].requestTimeoutMs).toBeUndefined();
   });
 
-  it('explains that nothing was merged when the merge call times out, rather than surfacing a bare transport error', async () => {
+  it('explains that nothing was merged when a call times out, rather than surfacing a bare transport error', async () => {
     const { api, errorNotifications } = fakeApi({
       toolPath: 'C:\\wsm\\WitcherScriptMerger.Headless.exe',
     });
-    const timeout = new Error("WSM MCP request 'tools/call' timed out after 600000ms");
+    const timeout = new Error("WSM MCP request 'initialize' timed out after 30000ms");
     const { connect } = fakeConnect([{ error: timeout }]);
 
     await resolveScriptConflicts(api, { connect });
@@ -414,7 +414,7 @@ describe('resolveScriptConflicts', () => {
     expect(errorNotifications).toHaveLength(1);
     const shown = errorNotifications[0].message;
     expect(shown).toContain('nothing was merged');
-    expect(shown).toContain('10 minutes');
+    expect(shown).toContain('as long as it needs');
     // the original error is still handed over as the detail, not swallowed
     expect(errorNotifications[0].detail).toBe(timeout);
   });
