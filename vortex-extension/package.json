@@ -1,6 +1,6 @@
 {
   "name": "witcherscriptmerger-vortex",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Vortex (Nexus Mods) companion extension for WitcherScriptMerger (WSM) - drives WSM's MCP server for Witcher 3 script-conflict scanning and merging from inside Vortex.",

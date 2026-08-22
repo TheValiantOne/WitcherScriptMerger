@@ -23,7 +23,7 @@ export const DEFAULT_WSM_REPO = 'TheValiantOne/WitcherScriptMerger';
  * (`v<version>`) and `WitcherScriptMerger.Headless.csproj`'s own `<Version>`; bump it
  * alongside a new WSM release once that release's assets are published.
  */
-export const DEFAULT_WSM_VERSION = '0.6.4';
+export const DEFAULT_WSM_VERSION = '0.7.0';
 
 /**
  * Windows-only for now, matching Vortex itself being Windows-only today (see
@@ -35,13 +35,19 @@ export type WsmAssetPlatform = 'win-x64';
 
 /**
  * The Headless host (CLI + MCP, no GUI) rather than the WinForms host's own win-x64
- * asset: `WitcherScriptMerger.Headless/CLAUDE.md`'s "Dependency gating" section - the
- * WinForms host's `merge` *and* `mcp` verbs both gate on the combined
- * `ValidateDependencyPaths()` (QuickBMS + wcc_lite), so it refuses to even start
- * without bundle tooling this unit doesn't acquire. The Headless host gates on
- * `ValidateTextMergeDependencies()` only, so it works for flat-file conflicts with
- * nothing else installed - exactly what `mcpClient.ts` and a future one-shot `merge`
- * CLI invocation both need.
+ * asset: `WitcherScriptMerger.Headless/CLAUDE.md`'s "Dependency gating" section.
+ *
+ * The WinForms host's **`mcp` verb** gates on the combined `ValidateDependencyPaths()`
+ * (QuickBMS + wcc_lite), so it refuses to even start a server without bundle tooling
+ * this extension doesn't acquire - and MCP is precisely how this extension drives WSM,
+ * so that alone settles the choice. Its `merge` verb no longer does (it gates on
+ * `ValidateTextMergeDependencies()` like Headless); this comment previously said both
+ * verbs did, which stopped being true once that was fixed. The conclusion is unchanged,
+ * and if anything stronger: the one surface this extension actually uses is still gated.
+ *
+ * The Headless host gates on `ValidateTextMergeDependencies()` for both verbs, so it
+ * works for flat-file conflicts with nothing else installed - exactly what
+ * `mcpClient.ts` needs.
  */
 export function buildAssetFileName(version: string, platform: WsmAssetPlatform = 'win-x64'): string {
   return `WitcherScriptMerger.Headless-${version}-${platform}.zip`;

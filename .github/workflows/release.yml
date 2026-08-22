@@ -63,6 +63,23 @@ jobs:
             throw "Tag '$env:GITHUB_REF_NAME' (version '$tagVersion') does not match WitcherScriptMerger/Properties/AssemblyInfo.cs's AssemblyVersion ('$assemblyVersion'). Bump AssemblyVersion/AssemblyFileVersion there (and WitcherScriptMerger.Headless.csproj's <Version>) before tagging a release."
           }
 
+          # Fourth copy of the same number, and the one that silently rots: the Vortex
+          # extension downloads WitcherScriptMerger.Headless-<DEFAULT_WSM_VERSION>-win-x64.zip
+          # when a user acquires WSM through it. Nothing checked it before, so shipping a
+          # release without bumping it meant every new extension user auto-downloaded the
+          # PREVIOUS build - i.e. one missing exactly the fixes the release was cut for.
+          # It is not part of the extension's own version, which tracks separately.
+          $extMatch = Select-String -Path 'vortex-extension/src/githubRelease.ts' `
+            -Pattern "^export const DEFAULT_WSM_VERSION = '([^']+)';" | Select-Object -First 1
+          if (-not $extMatch) {
+            throw "Could not find DEFAULT_WSM_VERSION in vortex-extension/src/githubRelease.ts"
+          }
+          $extVersion = $extMatch.Matches[0].Groups[1].Value
+
+          if ($extVersion -ne $assemblyVersion) {
+            throw "vortex-extension/src/githubRelease.ts's DEFAULT_WSM_VERSION ('$extVersion') does not match AssemblyVersion ('$assemblyVersion'). That constant selects which WSM release the Vortex extension downloads, so leaving it behind ships an extension that fetches the wrong build."
+          }
+
           "version=$assemblyVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
   # build.yml (dotnet build + dotnet format whitespace --verify-no-changes) only runs on
