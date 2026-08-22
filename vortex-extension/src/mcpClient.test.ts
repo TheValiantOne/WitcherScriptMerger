@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
 vi.mock('child_process', () => ({ spawn: spawnMock }));
 
-const { WsmMcpClient } = await import('./mcpClient');
+const { WsmMcpClient, NO_REQUEST_TIMEOUT } = await import('./mcpClient');
 
 /** A newline-delimited-JSON stand-in for a spawned WSM `mcp` process. Answers
  *  `initialize` (so connect() resolves) and, by default, nothing else - leaving a
@@ -52,6 +52,16 @@ function fakeChild() {
   return { child, written };
 }
 
+/** Tracks settlement without letting an expected rejection escape as unhandled. */
+function track<T>(p: Promise<T>) {
+  const state = { settled: false, rejected: false, error: undefined as unknown };
+  p.then(
+    () => { state.settled = true; },
+    (err) => { state.settled = true; state.rejected = true; state.error = err; },
+  );
+  return state;
+}
+
 describe('WsmMcpClient request deadlines', () => {
   beforeEach(() => {
     spawnMock.mockReset();
@@ -65,22 +75,44 @@ describe('WsmMcpClient request deadlines', () => {
   async function connectFake(requestTimeoutMs?: number) {
     const { child, written } = fakeChild();
     spawnMock.mockReturnValue(child);
-    return { client: await WsmMcpClient.connect({ exePath: 'C:\\wsm\\fake.exe', requestTimeoutMs }), written };
+    const client = await WsmMcpClient.connect({ exePath: 'C:\\wsm\\fake.exe', requestTimeoutMs });
+    return { client, child, written };
   }
 
   // The bug this whole change exists for: merge_conflicts used to inherit the 30s
   // general-purpose default, and a big load order's merge (or its equally expensive
-  // dry-run preview) blew straight through it.
-  it('honors a per-call timeout override instead of the client default', async () => {
+  // dry-run preview) blew straight through it. A merge now gets no deadline at all.
+  it('never times out a call made with NO_REQUEST_TIMEOUT, however long it runs', async () => {
     const { client } = await connectFake(30_000);
 
-    const pending = client.mergeConflicts({ dryRun: true }, 600_000);
-    const assertion = expect(pending).rejects.toThrow(/timed out after 600000ms/);
+    const state = track(client.mergeConflicts({ dryRun: true }, NO_REQUEST_TIMEOUT));
 
-    // Well past the 30s client default - must NOT have rejected yet.
-    await vi.advanceTimersByTimeAsync(120_000);
-    // ...and now past the override.
-    await vi.advanceTimersByTimeAsync(600_000);
+    // an hour of wall clock - far past the 30s client default
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+
+    expect(state.settled).toBe(false);
+  });
+
+  // Liveness, not the clock, is what makes an unbounded wait safe: if WSM dies the
+  // request must still reject promptly rather than hang forever.
+  it('still rejects an unbounded call when the WSM process exits', async () => {
+    const { client, child } = await connectFake(30_000);
+
+    const pending = client.mergeConflicts({ dryRun: true }, NO_REQUEST_TIMEOUT);
+    const assertion = expect(pending).rejects.toThrow(/exited unexpectedly \(code 1\)/);
+
+    child.emit('exit', 1);
+
+    await assertion;
+  });
+
+  it('still rejects an unbounded call when the WSM process fails at the pipe level', async () => {
+    const { client, child } = await connectFake(30_000);
+
+    const pending = client.mergeConflicts({ dryRun: true }, NO_REQUEST_TIMEOUT);
+    const assertion = expect(pending).rejects.toThrow(/stdin error: broken pipe/);
+
+    child.stdin.emit('error', new Error('broken pipe'));
 
     await assertion;
   });
@@ -96,14 +128,13 @@ describe('WsmMcpClient request deadlines', () => {
     await assertion;
   });
 
-  // The override must stay scoped to the one call. If it leaked onto the client it would
-  // also bound the initialize handshake, and a WSM process that fails to start would hang
-  // for the full merge-sized deadline instead of failing fast.
-  it('does not let a per-call override leak into later calls on the same client', async () => {
+  // The unbounded wait must stay scoped to the one call. If it leaked onto the client it
+  // would also cover the initialize handshake, and a WSM process that fails to start would
+  // hang forever instead of failing fast.
+  it('does not let an unbounded call stop later calls on the same client from timing out', async () => {
     const { client } = await connectFake(30_000);
 
-    const long = client.mergeConflicts({ dryRun: true }, 600_000);
-    const longAssertion = expect(long).rejects.toThrow(/timed out after 600000ms/);
+    const unbounded = track(client.mergeConflicts({ dryRun: true }, NO_REQUEST_TIMEOUT));
 
     const short = client.getStatus();
     const shortAssertion = expect(short).rejects.toThrow(/timed out after 30000ms/);
@@ -111,8 +142,7 @@ describe('WsmMcpClient request deadlines', () => {
     await vi.advanceTimersByTimeAsync(30_000);
     await shortAssertion;
 
-    await vi.advanceTimersByTimeAsync(600_000);
-    await longAssertion;
+    expect(unbounded.settled).toBe(false);
   });
 
   it('uses the client default for the initialize handshake', async () => {

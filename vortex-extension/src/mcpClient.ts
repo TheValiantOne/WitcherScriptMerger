@@ -34,6 +34,18 @@ const MCP_PROTOCOL_VERSION = '2025-06-18';
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
+/**
+ * Pass as a call's `timeoutMs` to wait indefinitely instead of applying a deadline.
+ *
+ * Safe because this client does not rely on a wall-clock deadline to notice a dead
+ * server: the constructor wires `failAllPending` to the child's `exit`, `error` and
+ * stdin-`error` events, so a WSM process that crashes, is killed, or closes its pipes
+ * rejects every in-flight request immediately with a `WsmMcpProcessError`. What a
+ * deadline adds on top of that is only the ability to give up on a process that is alive
+ * and still working - which, for a merge, is precisely the case you must not abandon.
+ */
+export const NO_REQUEST_TIMEOUT = null;
+
 /** How much of the child process's stderr to retain for diagnostics on failure. */
 const STDERR_TAIL_LIMIT = 4000;
 
@@ -217,7 +229,10 @@ interface McpToolCallResult {
 interface PendingRequest {
   resolve: (value: unknown) => void;
   reject: (reason: unknown) => void;
-  timer: ReturnType<typeof setTimeout>;
+  /** `undefined` for a request made with `NO_REQUEST_TIMEOUT` - there is no timer to
+   *  clear when it settles. `clearTimeout(undefined)` is a no-op, so every call site
+   *  stays unchanged. */
+  timer: ReturnType<typeof setTimeout> | undefined;
 }
 
 export class WsmMcpClient {
@@ -323,16 +338,17 @@ export class WsmMcpClient {
   }
 
   /**
-   * `timeoutMs` overrides this client's `requestTimeoutMs` for this one call. Use it for a
-   * tool whose runtime scales with the user's data rather than being bounded by round-trip
-   * latency - `merge_conflicts` above all (see `resolveAction.ts`'s
-   * `MERGE_CALL_TIMEOUT_MS`). Overriding per-call, rather than raising the whole client's
-   * `requestTimeoutMs` at `connect` time, is deliberate: that value also bounds the
-   * `initialize` handshake, and a handshake that hasn't answered in a few seconds means a
-   * WSM process that failed to start, not one that's working hard - it should fail fast
-   * instead of inheriting a merge-sized deadline.
+   * `timeoutMs` overrides this client's `requestTimeoutMs` for this one call; pass
+   * `NO_REQUEST_TIMEOUT` (null) to wait indefinitely. Use the latter for a tool whose
+   * runtime is the user's data rather than a round trip - `merge_conflicts` above all (see
+   * `resolveAction.ts`'s `MERGE_CALL_TIMEOUT`).
+   *
+   * Overriding per-call, rather than changing the whole client's `requestTimeoutMs` at
+   * `connect` time, is deliberate: that value also bounds the `initialize` handshake, and a
+   * handshake that hasn't answered in a few seconds means a WSM process that failed to
+   * start, not one that's working hard - it should keep failing fast.
    */
-  async callTool<T = unknown>(name: string, args?: Record<string, unknown>, timeoutMs?: number): Promise<T> {
+  async callTool<T = unknown>(name: string, args?: Record<string, unknown>, timeoutMs?: number | null): Promise<T> {
     const result = (await this.request('tools/call', {
       name,
       arguments: args ?? {},
@@ -369,7 +385,7 @@ export class WsmMcpClient {
     return this.callTool<ScanConflictsResult>('scan_conflicts');
   }
 
-  mergeConflicts(args?: MergeConflictsArgs, timeoutMs?: number): Promise<MergeConflictsResult> {
+  mergeConflicts(args?: MergeConflictsArgs, timeoutMs?: number | null): Promise<MergeConflictsResult> {
     return this.callTool<MergeConflictsResult>('merge_conflicts', args as Record<string, unknown> | undefined, timeoutMs);
   }
 
@@ -422,16 +438,20 @@ export class WsmMcpClient {
     }
   }
 
-  private request(method: string, params?: unknown, timeoutMs?: number): Promise<unknown> {
+  private request(method: string, params?: unknown, timeoutMs?: number | null): Promise<unknown> {
     const id = this.nextId++;
     const message: JsonRpcRequest = { jsonrpc: '2.0', id, method, params };
-    const deadlineMs = timeoutMs ?? this.requestTimeoutMs;
+    // `undefined` means "use the client default"; `NO_REQUEST_TIMEOUT` (null) means
+    // "no deadline at all" - see its own comment for why that's safe here.
+    const deadlineMs = timeoutMs === undefined ? this.requestTimeoutMs : timeoutMs;
 
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`WSM MCP request '${method}' timed out after ${deadlineMs}ms`));
-      }, deadlineMs);
+      const timer = deadlineMs === NO_REQUEST_TIMEOUT
+        ? undefined
+        : setTimeout(() => {
+          this.pending.delete(id);
+          reject(new Error(`WSM MCP request '${method}' timed out after ${deadlineMs}ms`));
+        }, deadlineMs);
 
       this.pending.set(id, { resolve, reject, timer });
       this.writeMessage(message);

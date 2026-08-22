@@ -2,7 +2,7 @@ import { log, selectors, types } from 'vortex-api';
 import { checkCoexistenceDrift, computeMergeStateSnapshot, recordOwnMergeStateSnapshot } from './coexistenceGuard';
 import { WSM_TOOL_ID } from './discoveredTool';
 import { isWitcher3Active, WITCHER3_GAME_ID } from './gating';
-import { GetStatusResult, ListMergesResult, MergeConflictsArgs, MergeConflictsResult, WsmMcpClient, WsmMcpClientOptions } from './mcpClient';
+import { GetStatusResult, ListMergesResult, MergeConflictsArgs, MergeConflictsResult, NO_REQUEST_TIMEOUT, WsmMcpClient, WsmMcpClientOptions } from './mcpClient';
 import { buildMergeSummaryDialogContent } from './mergePanel';
 import { mergeWithProcessEnv } from './wsmEnv';
 
@@ -43,6 +43,39 @@ import { mergeWithProcessEnv } from './wsmEnv';
 
 const ACTIVITY_NOTIFICATION_ID = 'witcherscriptmerger-vortex-resolve-conflicts-activity';
 
+/**
+ * A `merge_conflicts` call - preview or real merge - gets **no deadline at all**.
+ *
+ * `mcpClient.ts`'s general-purpose `DEFAULT_REQUEST_TIMEOUT_MS` (30s) used to apply here,
+ * and it was not merely too short - a wall-clock limit is the wrong instrument for this
+ * call. A merge's runtime is a function of the user's load order, with no bound anyone can
+ * pick in advance, so any deadline fires *only* on a merge that is running normally and
+ * simply needs longer. The failure it caused was severe and silent: on a real 274-mod load
+ * order with 44 conflicting script files the dry-run preview alone blew past 30s, so
+ * `resolveScriptConflicts` reported "Failed to preview script-conflict merges" and
+ * returned at the preview stage - the real merge below it never ran. The user was left
+ * with an unmerged (and, because a prior deploy had already cleared it, empty)
+ * `mod0000_MergedFiles` and a game that would not start, with ~200 script compile errors
+ * naming members the merge is supposed to add to vanilla scripts.
+ *
+ * Note this applies to the dry-run preview just as much as the real merge: a preview does
+ * the entire scan-and-three-way-merge computation and only skips the writes, so it costs
+ * essentially the same time as the merge it previews. Treating it as the cheap one is what
+ * produced the failure above.
+ *
+ * Waiting indefinitely is safe because liveness, not the clock, is what detects a dead
+ * server: `WsmMcpClient` fails every in-flight request the moment the child process exits,
+ * errors, or closes its pipes (see `NO_REQUEST_TIMEOUT`). The only case a deadline would
+ * still catch is a WSM process that is alive but wedged - and for that, an
+ * unbounded wait plus a visible activity notification is better than silently abandoning a
+ * merge mid-flight, which is exactly how the merged mod ended up empty.
+ *
+ * Deliberately applied per call, NOT as `connect`'s client-wide `requestTimeoutMs`: that
+ * also bounds the `initialize` handshake, where a few seconds of silence means WSM failed
+ * to start and should still fail fast.
+ */
+const MERGE_CALL_TIMEOUT = NO_REQUEST_TIMEOUT;
+
 /** The subset of `WsmMcpClient` this file actually needs - lets unit tests inject a
  *  fake without spawning a real WSM process (mirrors `toolAcquisition.ts`'s own
  *  `client`/`extractor` test seams).
@@ -54,33 +87,9 @@ const ACTIVITY_NOTIFICATION_ID = 'witcherscriptmerger-vortex-resolve-conflicts-a
  *  needs both. Reusing the same already-connected client (rather than opening a third
  *  one just for this) is the entire point - see that function's own doc comment on why
  *  it takes a client instead of connecting its own. */
-/**
- * How long to allow a single `merge_conflicts` MCP call - preview or real merge - before
- * giving up. Ten minutes, matching `nexusDownloader.ts`'s `DEFAULT_DOWNLOAD_TIMEOUT_MS`
- * precedent for "an operation whose runtime is the user's data, not a round trip".
- *
- * `mcpClient.ts`'s general-purpose `DEFAULT_REQUEST_TIMEOUT_MS` (30s) is far too short
- * here, and this is not theoretical: on a real 274-mod load order with 44 conflicting
- * script files, the *preview* alone blew past 30s, so `resolveScriptConflicts` reported
- * "Failed to preview script-conflict merges" and returned at the preview stage - the real
- * merge below it never ran at all. The user was left with an unmerged (and, because a
- * prior deploy had already cleared it, empty) `mod0000_MergedFiles` and a game that
- * refused to start, with ~200 script compile errors naming members the merge is supposed
- * to add to vanilla scripts.
- *
- * Note this applies to the dry-run preview just as much as the real merge: a preview does
- * the entire scan-and-three-way-merge computation and only skips the writes, so it costs
- * essentially the same time as the merge it is previewing. Sizing this off "it's only a
- * preview" would reintroduce the same bug.
- *
- * Deliberately NOT passed to `connect` as the client-wide `requestTimeoutMs`: that also
- * bounds the `initialize` handshake, which should still fail fast when WSM can't start -
- * see `WsmMcpClient.callTool`'s own comment on the per-call override.
- */
-const MERGE_CALL_TIMEOUT_MS = 10 * 60 * 1000;
 
 export interface WsmMergeClient {
-  mergeConflicts(args?: MergeConflictsArgs, timeoutMs?: number): Promise<MergeConflictsResult>;
+  mergeConflicts(args?: MergeConflictsArgs, timeoutMs?: number | null): Promise<MergeConflictsResult>;
   getStatus(): Promise<GetStatusResult>;
   listMerges(): Promise<ListMergesResult>;
   close(): Promise<void>;
@@ -240,7 +249,7 @@ async function runMergeConflictsWorkflow(
   try {
     const client = await connect({ exePath, env });
     try {
-      const result = await client.mergeConflicts(args, MERGE_CALL_TIMEOUT_MS);
+      const result = await client.mergeConflicts(args, MERGE_CALL_TIMEOUT);
 
       // Unit K: reconciles coexistenceGuard.ts's own "last known merge state" against
       // this extension's own just-completed workflow, using the same still-open client
@@ -299,13 +308,12 @@ async function runMergeConflictsWorkflow(
 }
 
 /**
- * A timed-out `merge_conflicts` call reads, on its own, as a bare transport error
- * ("request 'tools/call' timed out after ...ms") that says nothing about what it means for
- * the user's install. It means specifically that *no merge was written* - and if a deploy
- * had already cleared the merged mod, that leaves the game unable to start, which is a far
- * worse outcome than the wording suggests. `isTimeout` spots that case so `reportFailure`
- * can say so, and point at the one thing that actually helps (a huge load order simply
- * needing longer than `MERGE_CALL_TIMEOUT_MS`).
+ * With `MERGE_CALL_TIMEOUT` unbounded, a timeout can no longer come from the merge itself
+ * - only from the short-deadline calls around it, above all the `initialize` handshake,
+ * which means the WSM process never came up. On its own that surfaces as a bare transport
+ * error ("request 'initialize' timed out after 30000ms") that says nothing about what it
+ * means for the install: no merge ran, and if a deploy had already cleared the merged mod,
+ * the game may not start. `isTimeout` spots that case so `reportFailure` can say so.
  */
 function isTimeout(err: unknown): boolean {
   return err instanceof Error && /timed out after \d+ms/.test(err.message);
@@ -319,9 +327,9 @@ function reportFailure(api: types.IExtensionApi, message: string, err: unknown):
     timedOut: isTimeout(err),
   });
   const shown = isTimeout(err)
-    ? `${message}: Script Merger did not finish within ${Math.round(MERGE_CALL_TIMEOUT_MS / 60000)} minutes, so nothing was merged. `
+    ? `${message}: Script Merger did not respond, so nothing was merged. `
       + 'Your merged mod has been left untouched - if it is empty or out of date, the game may fail to start until a merge completes. '
-      + 'Very large load orders can need longer; running Script Merger directly will also do the merge.'
+      + 'The merge itself is allowed to run for as long as it needs, so this points at Script Merger failing to start rather than being slow.'
     : message;
   api.showErrorNotification?.(shown, detail);
 }
