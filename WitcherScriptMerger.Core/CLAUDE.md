@@ -602,3 +602,43 @@ the synthetic-edge-cases + real-recorded-hash cross-check pattern described in
 - Merge history: `MergeInventory.xml`, via `XmlSerializer` (`Inventory/MergeInventory.cs`).
 - Game load order: `LoadOrder/CustomLoadOrder.cs` reads the game's own `mods.settings`
   file.
+
+### Vortex-managed sidecar config (`WitcherScriptMerger.exe.config`)
+
+`GetRawValue` resolves a key in three steps, first non-blank wins:
+
+1. `WSM_<key>` environment variable (`GetEnvironmentOverride`).
+2. Our own config — `<AssemblyName>.dll.config`, via `ConfigurationManager`.
+3. **The Vortex-managed sidecar**, `AppSettings.VortexSidecarFileName`
+   (`WitcherScriptMerger.exe.config`) beside the entry assembly.
+
+Step 3 exists because Vortex's bundled `game-witcher3` extension both **reads and writes**
+a script-merger config under the .NET Framework `<exe>.exe.config` name this project
+stopped using at the .NET 10 modernization. It parses that file for `MergedModName`
+(`scriptmerger.ts::getMergedModName`) and writes `GameDirectory`,
+`VanillaScriptsDirectory` and `ModsDirectory` into it when configuring a merger install
+(`scriptmerger.ts::setMergerConfig`). Without this fallback the two never meet: Vortex
+writes a file WSM never reads, so a user who "configures WSM through Vortex" changes
+nothing at all — and Vortex logs `failed to ascertain merged mod name - using
+"mod0000_MergedFiles"` and silently falls back to a hardcoded guess.
+
+**A fallback, not an override**, deliberately: a non-blank value in our own config is an
+explicit choice (the GUI's settings screen writes there via `Set`/`Save`, and Vortex never
+writes `MergedModName`), so it must win. The sidecar only fills in what we would otherwise
+have to derive — which is exactly the shape of the three keys Vortex writes, since
+`GameDirectory`/`ModsDirectory`/`VanillaScriptsDirectory` all ship blank meaning "derive
+from the working directory". Env overrides still beat both.
+
+`ParseAppSettingValue(xml, key)` is a pure static over the file's text — no filesystem, no
+`AppState` — so it's directly unit-testable (`AppSettingsTests`); it returns `null` for
+anything it can't confidently read (malformed XML, missing key, blank value) so every
+caller falls through to existing behavior instead of acting on a half-parsed file. The
+read is cached after the first attempt and never throws or prompts: it runs inside every
+settings read, including scan paths where an exception would surface as a merge failure.
+`Settings[key]` is dereferenced with `?.` so a key present *only* in the sidecar still
+resolves rather than throwing first.
+
+The WinForms host's csproj emits this file at build and publish (never overwriting an
+existing one — Vortex owns it once written); see `WitcherScriptMerger/CLAUDE.md`.
+`WitcherScriptMerger.Headless` deliberately does not, since Vortex's extension only ever
+looks for a merger named `WitcherScriptMerger.exe`.

@@ -37,7 +37,17 @@ merges via `InteractiveMergeRunner`, and wires up async callbacks.
   The publish's `<AssemblyName>.dll.config` (the `App.config` copy
   `System.Configuration.ConfigurationManager` actually reads, via Core's
   `AppSettings.cs`) lands next to the executable — copy it there if deploying the exe on
-  its own. This resolves correctly even in a single-file publish despite
+  its own. A second copy, `WitcherScriptMerger.exe.config`, lands beside it via the
+  `EmitVortexCompatConfigForBuild`/`EmitVortexCompatConfigForPublish` targets in this
+  project's csproj — that's the .NET Framework name Vortex's bundled `game-witcher3`
+  extension hardcodes and both reads and writes (see Core's `CLAUDE.md`'s "Vortex-managed
+  sidecar config"). It is only written when absent: Vortex owns that file once it has
+  configured a merger install, and clobbering it on every rebuild would throw away the
+  paths it wrote. Two separate targets rather than one with
+  `AfterTargets="Build;Publish"` because the SDK defines `$(PublishDir)`
+  unconditionally (defaulting to `$(OutDir)publish\`), so a single target choosing
+  "PublishDir if set, else OutDir" silently wrote to the publish folder during an ordinary
+  build and left the build output without the file. This resolves correctly even in a single-file publish despite
   `Assembly.GetEntryAssembly().Location` being documented (and confirmed via a real
   build's `IL3000` warning) to always return `""` for a single-file-bundled assembly —
   `ConfigurationManager.OpenExeConfiguration("")` still finds and reads the real

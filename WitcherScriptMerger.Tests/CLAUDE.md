@@ -64,6 +64,14 @@ does.
   `DiffPlexMergeEngine` against a real `KDiff3.exe` binary, when a developer happens to
   have one locally (WSM no longer bundles or requires KDiff3 itself — see
   `docs/decisions/kdiff3-retirement.md`).
+- `AppSettingsTests.cs` — `AppSettings`'s `WSM_<key>` environment-variable override, and
+  (added alongside the Vortex sidecar interop) `AppSettings.ParseAppSettingValue`: the pure
+  parser behind the `WitcherScriptMerger.exe.config` fallback Vortex's bundled
+  `game-witcher3` extension reads and writes. Covers key lookup, case-sensitivity, a blank
+  value and a missing key both yielding `null` (which is what makes `GetRawValue`'s `??`
+  fall through correctly), malformed/truncated/empty XML degrading to `null` rather than
+  throwing, null/blank inputs, and that `VortexSidecarFileName` still matches the name
+  Vortex hardcodes — see Core's `CLAUDE.md`'s "Vortex-managed sidecar config" section.
 - `LiveInstall.cs` — see "Live-install cross-check tests" below.
 
 ## `AppState.Settings`-safety constraints
