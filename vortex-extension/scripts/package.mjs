@@ -39,10 +39,12 @@ const INFO_JSON = path.join(ROOT, 'info.json');
 const RELEASE_DIR = path.join(ROOT, 'release');
 
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
-// The staged folder's own name - not read from info.json (which declares no explicit
-// "id" field; @nexusmods/vortex-api's own IExtension typing marks `id` optional), so
-// there's no single canonical extension id to derive this from. package.json's own
-// `name` is used instead, matching this repo's git history/npm package identity.
+// The staged folder's own name. info.json now declares an explicit "id"
+// (@nexusmods/vortex-api's IExtension typing marks it optional, but Vortex uses it as
+// the extension's stable identity), and the two are asserted equal below - so this could
+// read from either. It stays on package.json's `name` because that's also what the zip
+// filename and this repo's npm package identity use; the assertion is what keeps them
+// from drifting apart.
 const stageName = pkg.name;
 const stageDir = path.join(RELEASE_DIR, stageName);
 
@@ -52,6 +54,37 @@ if (!fs.existsSync(path.join(DIST_DIR, 'index.js'))) {
 }
 if (!fs.existsSync(INFO_JSON)) {
   console.error(`info.json not found at '${INFO_JSON}' - this is this extension's own Vortex manifest and should always be present.`);
+  process.exit(1);
+}
+
+// package.json and info.json carry the version independently, and nothing used to
+// reconcile them: the produced zip is named from package.json's version while the
+// manifest Vortex actually reads is info.json's, so a one-sided bump ships an archive
+// whose filename disagrees with the version Vortex reports. Fail the package step
+// rather than emit that.
+const info = JSON.parse(fs.readFileSync(INFO_JSON, 'utf8'));
+if (info.version !== pkg.version) {
+  console.error(
+    `Version mismatch: package.json says '${pkg.version}' but info.json says '${info.version}'. ` +
+    `The zip is named from package.json while Vortex reads info.json, so these must agree - ` +
+    `update both before packaging.`,
+  );
+  process.exit(1);
+}
+
+// The id is what Vortex uses as the extension's stable identity. Without it, identity
+// and the installed folder name derive from the archive filename and can change between
+// releases, which makes an update look like a different extension.
+if (!info.id) {
+  console.error(`info.json is missing an 'id' - Vortex needs a stable extension id that doesn't change between releases.`);
+  process.exit(1);
+}
+if (info.id !== pkg.name) {
+  console.error(
+    `Identity mismatch: package.json name is '${pkg.name}' but info.json id is '${info.id}'. ` +
+    `The staged folder and zip are named from the former while Vortex identifies the extension ` +
+    `by the latter, so a divergence installs under one name and registers under another.`,
+  );
   process.exit(1);
 }
 
@@ -115,6 +148,8 @@ console.log(`\nPackaged: ${zipPath}`);
 console.log(`Staged (unzipped) folder: ${stageDir}`);
 console.log(
   `\nManual install: extract the zip (or copy the staged folder's contents) so they land directly in\n` +
-    `  %APPDATA%\\Vortex\\plugins\\${stageName}\\\n` +
+    `  <Vortex userData>\\plugins\\${stageName}\\\n` +
+    `where <Vortex userData> is %APPDATA%\\Vortex for a default per-user install, or\n` +
+    `C:\\ProgramData\\vortex when Vortex is set up with shared/multi-user storage.\n` +
     `i.e. that folder should directly contain index.js and info.json, not a nested subfolder.`,
 );

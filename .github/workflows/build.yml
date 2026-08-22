@@ -40,3 +40,42 @@ jobs:
 
       - name: Verify formatting
         run: dotnet format whitespace WitcherScriptMerger.sln --verify-no-changes
+
+  # The Vortex extension is roughly half of recent activity in this repo and had no CI
+  # coverage at all - build.yml ran only .NET steps, so a TypeScript compile error, a lint
+  # failure, or a broken test could land on main unnoticed. Runs on ubuntu (no .NET or
+  # Windows dependency here) and only when the extension actually changed.
+  vortex-extension:
+    name: Vortex extension (typecheck, lint, test)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: vortex-extension/package-lock.json
+
+      # `npm ci` (not `npm install`) so the lockfile is authoritative and a drifted
+      # lockfile fails the build instead of being silently rewritten.
+      - name: Install dependencies
+        working-directory: vortex-extension
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: vortex-extension
+        run: npm run typecheck
+
+      - name: Lint
+        working-directory: vortex-extension
+        run: npm run lint
+
+      # `npm test` is the src/ unit suite. The test/ integration suite is deliberately NOT
+      # run here: it spawns a real WitcherScriptMerger binary, which CI has no copy of.
+      - name: Test
+        working-directory: vortex-extension
+        run: npm test
