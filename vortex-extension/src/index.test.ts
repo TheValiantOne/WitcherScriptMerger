@@ -13,6 +13,7 @@ const {
   notifyConflictsIfChangedMock,
   isModOrDependencyInstallActiveMock,
   refreshCoexistenceStateMock,
+  resolveScriptConflictsMock,
 } = vi.hoisted(() => ({
   ensureWsmToolRegisteredMock: vi.fn(),
   registerWsmStatusDashletMock: vi.fn(),
@@ -21,6 +22,7 @@ const {
   notifyConflictsIfChangedMock: vi.fn(),
   isModOrDependencyInstallActiveMock: vi.fn(),
   refreshCoexistenceStateMock: vi.fn(),
+  resolveScriptConflictsMock: vi.fn(),
 }));
 
 vi.mock('./toolAcquisition', () => ({
@@ -32,6 +34,15 @@ vi.mock('./toolAcquisition', () => ({
 // covered directly by statusTile.test.ts instead).
 vi.mock('./statusTile', () => ({
   registerWsmStatusDashlet: registerWsmStatusDashletMock,
+}));
+
+// Partial mock, deliberately: index.ts now also imports resolveScriptConflicts, to hand
+// notifyConflictsIfChanged the callback behind the notification's "Resolve Now" button.
+// Only that one export is stubbed - registerResolveScriptConflictsAction stays real,
+// because a test below asserts it reaches context.registerAction with the right shape.
+vi.mock('./resolveAction', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./resolveAction')>()),
+  resolveScriptConflicts: resolveScriptConflictsMock,
 }));
 
 vi.mock('./conflictScan', () => ({
@@ -357,7 +368,7 @@ describe('main (index.ts)', () => {
       await fireAsyncEvent('did-deploy', 'profile1', undefined);
 
       expect(scanWsmConflictsMock).toHaveBeenCalledTimes(1);
-      expect(notifyConflictsIfChangedMock).toHaveBeenCalledWith(context.api, conflicts);
+      expect(notifyConflictsIfChangedMock).toHaveBeenCalledWith(context.api, conflicts, expect.any(Function));
     });
 
     it('skips scanning (without throwing) when no WSM tool has been acquired yet', async () => {
@@ -396,7 +407,61 @@ describe('main (index.ts)', () => {
       await fireAsyncEvent('did-deploy', 'profile1', undefined);
 
       expect(scanWsmConflictsMock).toHaveBeenCalledTimes(1);
-      expect(notifyConflictsIfChangedMock).toHaveBeenCalledWith(context.api, conflicts);
+      expect(notifyConflictsIfChangedMock).toHaveBeenCalledWith(context.api, conflicts, expect.any(Function));
+    });
+
+    // The whole point of the third argument: the notification's "Resolve Now" button has
+    // to actually run the merge workflow, not just exist. Regression coverage for the
+    // passive version, which shipped `actions: []` and left the user to go find a
+    // different button - on a real install it fired seconds before a game that wouldn't
+    // start, and led nowhere.
+    it('hands notifyConflictsIfChanged a callback that runs the resolve-conflicts workflow', async () => {
+      ensureWsmToolRegisteredMock.mockClear().mockResolvedValue(false);
+      isWsmToolAcquiredMock.mockClear().mockResolvedValue(true);
+      isModOrDependencyInstallActiveMock.mockClear().mockReturnValue(false);
+      refreshCoexistenceStateMock.mockClear().mockResolvedValue(undefined);
+      scanWsmConflictsMock.mockClear().mockResolvedValue([{ relativePath: 'a.ws' }]);
+      notifyConflictsIfChangedMock.mockClear();
+      resolveScriptConflictsMock.mockReset().mockResolvedValue(undefined);
+      const { context, fireOnce, fireAsyncEvent } = fakeContext(WITCHER3_GAME_ID, {
+        profile1: { gameId: WITCHER3_GAME_ID },
+      });
+
+      main(context);
+      fireOnce();
+      await fireAsyncEvent('did-deploy', 'profile1', undefined);
+
+      const onResolveNow = notifyConflictsIfChangedMock.mock.calls[0][2] as () => void;
+      expect(resolveScriptConflictsMock).not.toHaveBeenCalled();
+
+      onResolveNow();
+
+      expect(resolveScriptConflictsMock).toHaveBeenCalledWith(context.api);
+    });
+
+    // The callback must not let a rejected workflow escape as an unhandled rejection -
+    // resolveScriptConflicts reports its own failures to the user, so this is a log-only
+    // last-resort net, matching registerResolveScriptConflictsAction's own.
+    it('swallows a rejection from the Resolve Now callback rather than letting it escape', async () => {
+      ensureWsmToolRegisteredMock.mockClear().mockResolvedValue(false);
+      isWsmToolAcquiredMock.mockClear().mockResolvedValue(true);
+      isModOrDependencyInstallActiveMock.mockClear().mockReturnValue(false);
+      refreshCoexistenceStateMock.mockClear().mockResolvedValue(undefined);
+      scanWsmConflictsMock.mockClear().mockResolvedValue([{ relativePath: 'a.ws' }]);
+      notifyConflictsIfChangedMock.mockClear();
+      resolveScriptConflictsMock.mockReset().mockRejectedValue(new Error('boom'));
+      const { context, fireOnce, fireAsyncEvent } = fakeContext(WITCHER3_GAME_ID, {
+        profile1: { gameId: WITCHER3_GAME_ID },
+      });
+
+      main(context);
+      fireOnce();
+      await fireAsyncEvent('did-deploy', 'profile1', undefined);
+
+      const onResolveNow = notifyConflictsIfChangedMock.mock.calls[0][2] as () => void;
+
+      expect(() => onResolveNow()).not.toThrow();
+      await Promise.resolve();
     });
 
     // Fix for a real wasted-work case: notifyConflictsIfChanged would discard this

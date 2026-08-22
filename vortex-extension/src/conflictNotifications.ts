@@ -194,7 +194,26 @@ export function resetConflictNotificationState(): void {
  * with that same conflict set would silently skip re-attempting it for the rest of the
  * session (the same-signature early-return above would treat it as "already shown").
  */
-export function notifyConflictsIfChanged(api: types.IExtensionApi, conflicts: ScanConflictsResult): void {
+/**
+ * `onResolveNow`, when supplied, turns this from a passive warning into an actionable one:
+ * the notification gains a "Resolve Now" button running the same workflow as the Mods-page
+ * toolbar action. Injected rather than imported so this module stays free of a cycle -
+ * `resolveAction` imports `coexistenceGuard`, which imports this file - and so the callback
+ * is trivially stubbable in tests. `index.ts` (the composition root, which already imports
+ * `resolveAction`) is what supplies it.
+ *
+ * This exists because the passive version demonstrably did not work. On a real install this
+ * notification fired ("5 unresolved script conflicts found") seconds before the user
+ * launched into a game that would not start, with an empty merged mod - the information was
+ * right there and led nowhere, because `actions` was empty and the message said nothing
+ * about the consequence. A warning whose only remedy is "go find a different button" is one
+ * the user reads as noise.
+ */
+export function notifyConflictsIfChanged(
+  api: types.IExtensionApi,
+  conflicts: ScanConflictsResult,
+  onResolveNow?: () => void,
+): void {
   if (isModOrDependencyInstallActive(api)) {
     log('debug', 'witcherscriptmerger-vortex: mod/dependency install activity in progress - skipping conflict notification check');
     return;
@@ -214,9 +233,18 @@ export function notifyConflictsIfChanged(api: types.IExtensionApi, conflicts: Sc
       api.sendNotification?.({
         id: WSM_CONFLICTS_NOTIFICATION_ID,
         type: 'warning',
-        message: `WitcherScriptMerger: ${unresolved.length} unresolved script conflict${unresolved.length === 1 ? '' : 's'} found`,
+        message: `WitcherScriptMerger: ${unresolved.length} unresolved script conflict${unresolved.length === 1 ? '' : 's'} found`
+          + ' - the game may fail to start until they are merged',
         allowSuppress: true,
-        actions: [],
+        actions: onResolveNow === undefined ? [] : [
+          {
+            title: 'Resolve Now',
+            action: (dismiss?: () => void) => {
+              dismiss?.();
+              onResolveNow();
+            },
+          },
+        ],
       });
     }
   } catch (err) {
