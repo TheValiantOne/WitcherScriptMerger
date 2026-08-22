@@ -1,6 +1,9 @@
 ﻿using System;
 using System.Configuration;
+using System.IO;
+using System.Linq;
 using System.Reflection;
+using System.Xml.Linq;
 
 namespace WitcherScriptMerger
 {
@@ -52,8 +55,9 @@ namespace WitcherScriptMerger
 		}
 
 		// Resolves a key's raw string value: an environment-variable override first, then
-		// falling through to the existing ConfigurationManager-backed lookup. Both Get and
-		// Get<T> route through this single place so an env-var-sourced value goes through
+		// the existing ConfigurationManager-backed lookup, then - only when that yields
+		// nothing usable - the Vortex-managed sidecar (see VortexSidecarFileName). Both Get
+		// and Get<T> route through this single place so a value from any source goes through
 		// the exact same downstream handling (Get<T>'s Parse-based conversion in particular)
 		// as one read from App.config - never a separate ad-hoc parser.
 		string GetRawValue(string key)
@@ -63,10 +67,97 @@ namespace WitcherScriptMerger
 				return envValue;
 
 			if (CachedConfig.HasFile)
-				return CachedConfig.AppSettings.Settings[key].Value;
+			{
+				// Null-conditional, not a bare .Value: Settings[key] returns null for a key
+				// that isn't in App.config at all, which used to throw here and get swallowed
+				// by Get/Get<T>'s catch. Returning null instead is observably identical for
+				// both of those (empty string / default(T)), and it lets a key that exists
+				// ONLY in the sidecar still be found below rather than dying first.
+				var value = CachedConfig.AppSettings.Settings[key]?.Value;
+				if (!string.IsNullOrWhiteSpace(value))
+					return value;
+
+				// Blank in our own config. For the path settings that ship blank on purpose
+				// (GameDirectory/ModsDirectory/VanillaScriptsDirectory - blank means "derive
+				// from the working directory"), a Vortex-written sidecar value is strictly
+				// better information than deriving, so prefer it when there is one.
+				return ReadVortexSidecarSetting(key) ?? value;
+			}
 
 			AppState.Notifier.ShowError($"Config file doesn't exist:\n\n{CachedConfig.FilePath}");
 			return null;
+		}
+
+		// Vortex's bundled game-witcher3 extension reads AND writes a script-merger config
+		// at "<merger dir>\WitcherScriptMerger.exe.config" - the .NET Framework naming
+		// convention this project used before the .NET 10 modernization. It parses that file
+		// for MergedModName (scriptmerger.ts::getMergedModName) and writes GameDirectory,
+		// VanillaScriptsDirectory and ModsDirectory into it (scriptmerger.ts::setMergerConfig)
+		// when it configures a merger install. A modern .NET app's own configuration is
+		// "<assembly>.dll.config" instead, so without this the two never meet: Vortex writes
+		// a file WSM never reads, and the user "configures WSM through Vortex" with no
+		// effect at all.
+		//
+		// Reading it as a *fallback* rather than an override is deliberate. A non-blank
+		// value in our own config is an explicit choice (the GUI's own settings screen
+		// writes there via Set/Save, and Vortex never writes MergedModName), so it must
+		// win; the sidecar only fills in what we'd otherwise have to guess. Env overrides
+		// still beat both, unchanged.
+		public const string VortexSidecarFileName = "WitcherScriptMerger.exe.config";
+
+		string _sidecarPath;
+		bool _sidecarChecked;
+		string _sidecarXml;
+
+		string ReadVortexSidecarSetting(string key)
+		{
+			if (!_sidecarChecked)
+			{
+				_sidecarChecked = true;
+				try
+				{
+					_sidecarPath = Path.Combine(Path.GetDirectoryName(_assemblyPath) ?? string.Empty, VortexSidecarFileName);
+					if (File.Exists(_sidecarPath))
+						_sidecarXml = File.ReadAllText(_sidecarPath);
+				}
+				catch
+				{
+					// Unreadable/inaccessible sidecar is not an error - it's an optional
+					// interop file that usually isn't there at all. Never prompt, never
+					// throw: this runs inside every settings read, including on scan paths.
+					_sidecarXml = null;
+				}
+			}
+
+			return _sidecarXml == null ? null : ParseAppSettingValue(_sidecarXml, key);
+		}
+
+		// Split out as a pure string-in/string-out function so the sidecar parsing is
+		// directly unit-testable without a filesystem, a live AppSettings instance, or
+		// AppState - see WitcherScriptMerger.Tests/CLAUDE.md's "AppState.Settings-safety
+		// constraints". Returns null for anything it can't confidently read (malformed XML,
+		// missing key, blank value), so every caller falls through to its existing
+		// behavior rather than acting on a half-parsed file.
+		public static string ParseAppSettingValue(string xml, string key)
+		{
+			if (string.IsNullOrWhiteSpace(xml) || string.IsNullOrWhiteSpace(key))
+				return null;
+
+			try
+			{
+				var value = XDocument.Parse(xml)
+					.Root?.Elements("appSettings")
+					.Elements("add")
+					.Where(e => string.Equals((string)e.Attribute("key"), key, StringComparison.Ordinal))
+					.Select(e => (string)e.Attribute("value"))
+					.FirstOrDefault();
+
+				return string.IsNullOrWhiteSpace(value) ? null : value;
+			}
+			catch
+			{
+				return null;
+			}
 		}
 
 		// Deliberately unaware of GetEnvironmentOverride: this still only ever writes to

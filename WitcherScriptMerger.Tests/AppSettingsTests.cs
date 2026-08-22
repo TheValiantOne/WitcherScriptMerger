@@ -149,5 +149,96 @@ namespace WitcherScriptMerger.Tests
 				Environment.SetEnvironmentVariable(envVarName, originalValue);
 			}
 		}
+
+		#region Vortex sidecar config (WitcherScriptMerger.exe.config)
+
+		// Coverage for AppSettings.ParseAppSettingValue, the parser behind the
+		// Vortex-managed sidecar GetRawValue falls back to when our own config leaves a key
+		// blank - see AppSettings.cs's own comment on VortexSidecarFileName for why that
+		// file exists (Vortex's bundled game-witcher3 extension reads MergedModName from it
+		// and writes GameDirectory/VanillaScriptsDirectory/ModsDirectory into it, under the
+		// .NET Framework "<exe>.exe.config" name a modern .NET app doesn't use).
+		//
+		// Exercised as a pure static over an XML string: no filesystem, no AppSettings
+		// instance, no AppState - see WitcherScriptMerger.Tests/CLAUDE.md's
+		// "AppState.Settings-safety constraints".
+		const string SidecarXml = @"<?xml version=""1.0"" encoding=""utf-8""?>
+<configuration>
+  <appSettings>
+    <add key=""GameDirectory"" value=""G:\Games\Witcher3"" />
+    <add key=""ModsDirectory"" value=""G:\Games\Witcher3\mods"" />
+    <add key=""MergedModName"" value=""mod0000_MergedFiles"" />
+    <add key=""BlankOne"" value="""" />
+  </appSettings>
+</configuration>";
+
+		[Theory]
+		[InlineData("GameDirectory", @"G:\Games\Witcher3")]
+		[InlineData("ModsDirectory", @"G:\Games\Witcher3\mods")]
+		[InlineData("MergedModName", "mod0000_MergedFiles")]
+		public void ParseAppSettingValue_KeyPresent_ReturnsItsValue(string key, string expected)
+		{
+			Assert.Equal(expected, AppSettings.ParseAppSettingValue(SidecarXml, key));
+		}
+
+		// Null, never string.Empty, for anything unusable - GetRawValue's `?? value` fallback
+		// relies on that to fall through to its own (blank) config value rather than
+		// treating a blank sidecar entry as an answer.
+		[Theory]
+		[InlineData("NotInTheFile")]
+		[InlineData("BlankOne")]
+		public void ParseAppSettingValue_MissingOrBlankValue_ReturnsNull(string key)
+		{
+			Assert.Null(AppSettings.ParseAppSettingValue(SidecarXml, key));
+		}
+
+		// Matching is case-sensitive, matching ConfigurationManager's own <appSettings>
+		// behavior - "gamedirectory" must not resolve "GameDirectory".
+		[Fact]
+		public void ParseAppSettingValue_KeyCaseDiffers_ReturnsNull()
+		{
+			Assert.Null(AppSettings.ParseAppSettingValue(SidecarXml, "gamedirectory"));
+		}
+
+		// A malformed/truncated sidecar (Vortex interrupted mid-write, say) must degrade to
+		// "no answer" rather than throwing: this parser runs inside every settings read,
+		// including on scan paths where an exception would surface as a merge failure.
+		[Theory]
+		[InlineData("<configuration><appSettings><add key=\"GameDirectory\" value=\"x\" />")]
+		[InlineData("not xml at all")]
+		[InlineData("<configuration />")]
+		[InlineData("<configuration><appSettings /></configuration>")]
+		public void ParseAppSettingValue_MalformedOrEmptyXml_ReturnsNullWithoutThrowing(string xml)
+		{
+			Assert.Null(AppSettings.ParseAppSettingValue(xml, "GameDirectory"));
+		}
+
+		[Theory]
+		[InlineData(null)]
+		[InlineData("")]
+		[InlineData("   ")]
+		public void ParseAppSettingValue_NoXml_ReturnsNull(string xml)
+		{
+			Assert.Null(AppSettings.ParseAppSettingValue(xml, "GameDirectory"));
+		}
+
+		[Theory]
+		[InlineData(null)]
+		[InlineData("")]
+		[InlineData("   ")]
+		public void ParseAppSettingValue_NoKey_ReturnsNull(string key)
+		{
+			Assert.Null(AppSettings.ParseAppSettingValue(SidecarXml, key));
+		}
+
+		// The file name is the interop contract with Vortex's hardcoded
+		// scriptmerger.ts::MERGER_CONFIG_FILE - it is not ours to rename.
+		[Fact]
+		public void VortexSidecarFileName_MatchesTheNameVortexLooksFor()
+		{
+			Assert.Equal("WitcherScriptMerger.exe.config", AppSettings.VortexSidecarFileName);
+		}
+
+		#endregion
 	}
 }

@@ -53,19 +53,15 @@ does anything for any other game.
   whole-file merge failed but merging function-by-function succeeded), and - only on
   confirmation - spawns a second process to run the real merge and shows its result. v1
   scope, deliberately: merges every detected conflict in one pass; there's no per-file
-  selection or custom merge-order override yet. Both `merge_conflicts` calls get their own
-  ten-minute deadline (`MERGE_CALL_TIMEOUT_MS`) rather than `mcpClient.ts`'s
-  general-purpose 30s `DEFAULT_REQUEST_TIMEOUT_MS` — a merge's runtime scales with the
-  load order, and the dry-run preview costs the same as the merge it previews (it does the
-  full three-way merge and only skips the writes). The deadline is passed per call, so the
-  `initialize` handshake keeps the short default and a WSM process that fails to start
-  still fails fast.
-- **An actionable unresolved-conflicts notification** (`src/conflictNotifications.ts`):
-  the post-deploy scan's warning carries a **Resolve Now** button that runs the same
-  workflow as the toolbar action, and says that the game may fail to start until the
-  conflicts are merged. The callback is injected from `index.ts` rather than imported
-  directly, because `resolveAction` → `coexistenceGuard` → `conflictNotifications` would
-  otherwise close an import cycle.
+  selection or custom merge-order override yet. Both `merge_conflicts` calls run with **no
+  deadline** (`MERGE_CALL_TIMEOUT` = `NO_REQUEST_TIMEOUT`) rather than `mcpClient.ts`'s
+  general-purpose 30s `DEFAULT_REQUEST_TIMEOUT_MS` — a merge's runtime is the user's load
+  order, so any wall-clock limit can only fire on a merge that is working normally, and the
+  dry-run preview costs the same as the merge it previews (it does the full three-way merge
+  and only skips the writes). That's safe because the client fails every in-flight request
+  the moment the WSM process exits, errors, or closes its pipes, so liveness — not the
+  clock — detects a dead server. Applied per call, so the `initialize` handshake keeps the
+  short default and a WSM process that fails to start still fails fast.
 - **A merge-history dashboard tile** (`src/mergeHistoryDashlet.ts`): lists every merge
   WSM has already recorded (via its MCP `list_merges` tool) - relative path, which merged
   mod folder holds the result, and each source mod's recorded hash - with a manual
