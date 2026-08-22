@@ -28,4 +28,39 @@
     <ProjectReference Include="..\WitcherScriptMerger.Core\WitcherScriptMerger.Core.csproj" />
   </ItemGroup>
 
+  <!--
+    Also emit the config under the .NET Framework name ("WitcherScriptMerger.exe.config")
+    alongside the SDK's own "WitcherScriptMerger.dll.config". Vortex's bundled
+    game-witcher3 extension hardcodes the .exe.config name (scriptmerger.ts's
+    MERGER_CONFIG_FILE): it parses that file for MergedModName, and writes GameDirectory /
+    VanillaScriptsDirectory / ModsDirectory into it when configuring a merger install.
+    Without this file it can do neither, and logs "failed to ascertain merged mod name -
+    using mod0000_MergedFiles", silently falling back to a hardcoded guess.
+
+    Only written when it doesn't already exist: Vortex *owns* this file once it has written
+    to it, and clobbering it on every rebuild would throw away the paths it configured.
+    AppSettings.ReadVortexSidecarSetting is the reading half of this interop - see its
+    comment for the precedence rules.
+
+    Headless deliberately doesn't do this: Vortex's extension only ever looks for a merger
+    named WitcherScriptMerger.exe, so a WitcherScriptMerger.Headless.exe.config would be
+    read by nothing.
+
+    Two targets rather than one with AfterTargets="Build;Publish": the SDK defines
+    $(PublishDir) unconditionally (it defaults to "$(OutDir)publish\"), so a single target
+    picking "PublishDir if set, else OutDir" silently wrote to the publish folder during an
+    ordinary build and left the build output without the file.
+  -->
+  <Target Name="EmitVortexCompatConfigForBuild" AfterTargets="Build">
+    <Copy SourceFiles="App.config"
+          DestinationFiles="$(OutDir)$(AssemblyName).exe.config"
+          Condition="!Exists('$(OutDir)$(AssemblyName).exe.config')" />
+  </Target>
+
+  <Target Name="EmitVortexCompatConfigForPublish" AfterTargets="Publish">
+    <Copy SourceFiles="App.config"
+          DestinationFiles="$(PublishDir)$(AssemblyName).exe.config"
+          Condition="!Exists('$(PublishDir)$(AssemblyName).exe.config')" />
+  </Target>
+
 </Project>
