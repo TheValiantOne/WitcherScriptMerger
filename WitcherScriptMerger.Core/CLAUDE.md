@@ -19,7 +19,8 @@ still external dependencies rather than an in-process replacement.
 - `Inventory/` — core merge domain + persistence: `FileMerger.cs` (headless orchestration
   plus TreeNode-free interactive orchestration — see "FileMerger: interactive vs.
   headless split" below), `Merge.cs`, `MergeInventory.cs`, `FileHash.cs`,
-  `MergeProgressInfo.cs`.
+  `MergeProgressInfo.cs`, `MergeInventoryHygiene.cs` (stale-record detection — see
+  "Inventory hygiene" below).
 - `LoadOrder/` — mod load-order logic: `CustomLoadOrder.cs`, `LoadOrderComparer.cs`,
   `LoadOrderValidator.cs`, `ModLoadSetting.cs`.
 - `Tools/` — wrappers that shell out to bundled external executables, plus the sole
@@ -29,7 +30,9 @@ still external dependencies rather than an in-process replacement.
   default associated app" helper; the only call site is
   `DiffPlexMergeEngine.MergeHeadless`, opening a genuine conflict's marker sidecar),
   `ScriptUnitExtractor.cs`/`UnitAligner.cs`/`FunctionLevelMergeEngine.cs` (the
-  function-level merge fallback — see "Function-level merge engine" below).
+  function-level merge fallback — see "Function-level merge engine" below),
+  `StaleBuildDetector.cs` (the pre-flight counterpart to that engine's
+  vanilla-declaration invariant — see "Stale-build pre-flight" below).
 - `Cli/` — `MergeOperations.cs`: the scan-then-merge sequence shared by both hosts'
   `merge` CLI verb and by the MCP tools (see "CLI & MCP orchestration" below).
 - `Mcp/` — `WsmMcpTools.cs`: the MCP server's tool implementations (see below and
@@ -93,7 +96,16 @@ non-destructive for this specific prompt" — added for `LoadOrderValidator`'s
 the one destructive/permanent choice there). `HeadlessMergeNotifier` writes to the
 console and returns a fixed, non-destructive default per button set (don't overwrite,
 don't use a still-conflicting merge name, don't continue past a failure) unless the
-caller overrides it via `defaultResult`. The WinForms host's `MainForm` implements this
+caller overrides it via `defaultResult`. Its static `RouteAllOutputToStandardError` flag,
+set by both hosts' `mcp` verb before the server starts, forces **every** line to stderr:
+in MCP mode stdout carries the JSON-RPC frame stream, and a notifier line printed there
+lands mid-stream and corrupts the transport — the client sees unparseable JSON rather
+than a message from WSM. Ordinarily only `Error`/`Warning`/`Exclamation` route to stderr,
+which meant any default-icon `ShowMessage` a scan can reach corrupted the stream:
+`ModFileIndex.BuildAsync`'s "Can't find any mods in the Mods directory.", and the
+disabled-mod skip notice (see below). Caught by a real `scan_conflicts` round-trip
+returning a payload the client couldn't parse, with the notice spliced between two
+protocol frames. CLI mode is unaffected — the flag stays `false` there. The WinForms host's `MainForm` implements this
 interface too, translating the neutral types to/from real WinForms calls — see
 `WitcherScriptMerger/CLAUDE.md` for that translation and the one behavior change it
 introduced.
@@ -241,6 +253,108 @@ pure function behind `GetIgnoredModNames()`, split out so it's unit-testable wit
 touching `AppState.Settings` — see `WitcherScriptMerger.Tests/CLAUDE.md`'s
 "`AppState.Settings`-safety constraints" and `FileIndex/ModFileIndexTests.cs`.
 
+## Disabled mods are excluded from the conflict scan
+
+`ModFileIndex.BuildAsync` also drops any mod folder that `mods.settings` marks
+`Enabled=0`, via `ExcludeDisabledMods` → `CustomLoadOrder.IsModDisabledByName`.
+
+A scan is a filesystem glob over `Paths.ModsDirectory`, so before this a deployed-but-
+disabled mod looked exactly like an active one and its files counted as full conflict
+participants. That is not a cosmetic over-count — **a disabled mod can make a conflict
+permanently unmergeable**. Observed live: a disabled `modFearlessRoach` ships a
+pre-next-gen whole-file copy of `game\vehicles\horse\states\exploration.ws` (missing
+`CheckVector`/`DoHorseKick`/`OnHorseKick` plus member declarations), which trips
+`FunctionLevelMergeEngine`'s vanilla-declaration invariant, so every single run reported
+"needs manual resolution" for a file the game was never going to load that mod's version
+of anyway. On that install the change took the conflict count from 44 to 43, with the
+remaining 43 all resolving cleanly.
+
+**Only an explicit `Enabled=0` excludes a mod.** `IsModDisabledByName` returns `false`
+for a mod absent from `mods.settings` entirely, which is the correct reading — the game
+appends unknown mod folders on next launch, enabled. A missing or unreadable
+`mods.settings` likewise disables nobody (`CustomLoadOrder.Refresh` leaves `Mods` empty),
+so this can never make a scan miss conflicts on a fresh install or on a Linux host with
+no `Documents\The Witcher 3` at all.
+
+The `MergeDisabledMods` App.config setting opts out (scan every deployed mod regardless),
+the useful case being pre-merging a mod that's staged but not switched on yet. It is
+deliberately named for the opt-**out** so that its absence from an older `App.config`
+yields the new, wanted behavior: `AppSettings.Get<bool>` returns `false` for a key that
+isn't there. Skipped folders are reported through `AppState.Notifier` and exposed as
+`ModFileIndex.DisabledModsSkipped` (and the MCP `merge_conflicts` tool's
+`disabledModsSkipped`) — never silent, since a conflict disappearing from a scan should
+be visible rather than inferred from a changed count.
+
+`ModFileIndex.ExcludeDisabledModPaths(paths, isModDisabled, out skipped)` is the pure
+function behind it, split out to be unit-testable without `AppState.Settings` or a real
+`mods.settings` — same shape and same reason as `BuildIgnoredModNames` above.
+
+## Stale-build pre-flight (`Tools/StaleBuildDetector.cs`)
+
+The pre-flight counterpart to `ValidateWholeFileMergeOutput`'s vanilla-declaration
+invariant (see "Function-level merge engine" above). That invariant is the safety net —
+it fires *after* a merge has produced output that would have dropped vanilla
+declarations, and its message correctly guesses the cause ("...usually means that mod
+ships a whole-file copy taken from an older game build"). But by then the user is looking
+at a "Skipped — needs manual resolution" line, with the actionable fact (which mod is out
+of date, and that the remedy is to update or disable *that mod* rather than hand-merge a
+2500-line file) buried inside a sentence about a DiffPlex bug.
+
+`FindMissingVanillaDeclarations(vanillaText, modText)` runs the same comparison up front,
+straight off the files with no merge involved: every `ScriptUnitExtractor` scoped name the
+installed vanilla file has that a given mod's copy does not. Using the extractor's own
+`ScopedName` identity is what makes a pre-flight warning and a post-hoc violation name the
+same thing. An unscannable file on either side yields **no** finding — returning an empty
+set instead would make every vanilla declaration look missing and turn one malformed mod
+file into a wall of false warnings.
+
+**A diagnostic, never a gate.** Nothing here changes what does or doesn't merge: a mod
+*may* legitimately delete a vanilla function, and the check runs before any merge so it
+cannot know whether this particular conflict will actually fail. The message says so —
+it reports the drift and its usual consequence rather than asserting an outcome. That
+distinction is load-bearing: on a real install one mod was missing 1 of 224 declarations
+and its conflict auto-solved every time, while another missing 13 of 224 reliably tripped
+the invariant.
+
+Surfaced via both hosts' `merge` CLI output (`stale mod build:` lines), the MCP
+`scan_conflicts` tool's per-conflict `staleBuildWarnings`, and `merge_conflicts`'s
+top-level `staleBuildWarnings`. Only `.ws` conflicts are examined — `ScriptUnitExtractor`
+is WitcherScript-specific, exactly as the function-level rescue itself is gated — and the
+merged-mod folder is skipped, since it routinely appears among a conflict's sources once
+a file has been merged once and an "older game build" verdict on this tool's own output
+would be meaningless.
+
+## Inventory hygiene (`Inventory/MergeInventoryHygiene.cs`)
+
+Three staleness rules the WinForms GUI has always applied in
+`MainForm.RefreshMergeTree()` — merged file missing, source mod file missing, source mod
+disabled — lifted out as pure, promptless predicates so the headless CLI, the MCP tools
+and the Vortex extension see the same staleness the GUI does.
+
+**`MergeInventory.HasResolvedConflict` now requires the merged output to exist**
+(`HasMergedFile`). Without that check the record was self-certifying: every hash it
+verifies belongs to a *source* mod, all of which are present and unchanged when it's the
+*output* that has been deleted, so it answered "resolved" forever and nothing ever
+re-merged. Observed live for `game\vehicles\horse\states\exploration.ws` — record
+present, merged file absent, `alreadyResolved: true` on every scan, and the game
+therefore loading exactly one of the two conflicting mods with nothing indicating a
+problem.
+
+Bundle-content records are exempt from that existence check: their `GetMergedFile()`
+resolves under `Paths.MergedBundleContent`, which is working-directory-relative scratch
+space cleared between runs, so absence there says nothing about whether the merge is live
+— the real artifact is the packed bundle. Only flat files have a stable, absolute output
+path under the mods directory that "missing" is meaningful for, and flat files are the
+only category either headless host supports anyway.
+
+**Findings, not actions.** Deciding what to *do* about a stale record stays the caller's:
+the GUI asks the user (`ConfirmPruneMissingMergeFile` and friends), headless callers
+report it (`stale merge record:` CLI lines, `list_merges`'s `mergedFileExists` /
+`staleWarnings`). That split is deliberate rather than lazy — the GUI's three prompts all
+pass no `defaultResult`, so `HeadlessMergeNotifier` would answer its generic
+`YesNo => No` to every one of them and prune nothing, silently. Same defect shape as the
+`ConfirmOutputOverwrite` finding in `docs/bugs/function-level-merge-gap-handling.md`.
+
 ## CLI & MCP orchestration (`Cli/`, `Mcp/`)
 
 `Cli/MergeOperations.cs` is the scan-then-merge sequence shared by both hosts' `merge`
@@ -264,8 +378,11 @@ itself, since a file that's already been merged once has its own merged-mod fold
 re-enter `conflict.Mods` as if it were a source.
 
 `Mcp/WsmMcpTools.cs` (`[McpServerToolType]` static class) exposes four tools —
-`scan_conflicts`, `merge_conflicts` (optional `relativePaths`/`orderOverrides`/`dryRun`;
-returns `{merged, skipped, unmatched, dryRun}`), `get_status`, `list_merges` — all
+`scan_conflicts` (each conflict additionally carries `staleBuildWarnings`),
+`merge_conflicts` (optional `relativePaths`/`orderOverrides`/`dryRun`/`overwrite`;
+returns `{merged, skipped, unmatched, dryRun, overwrite, functionLevelDecisions,
+staleBuildWarnings, disabledModsSkipped}`), `get_status`, `list_merges` (each record
+additionally carries `mergedFileExists` and `staleWarnings`) — all
 reusing `MergeOperations` and the same `IMergeNotifier` machinery as the CLI verb.
 `get_status` reports `textMergeDependenciesValid` and `bundleDependenciesValid` as two
 independent fields (plus a combined `dependenciesValid`, kept for existing callers that

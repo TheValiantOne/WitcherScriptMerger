@@ -117,6 +117,24 @@ namespace WitcherScriptMerger.Inventory
 			if (merge == null)
 				return false;
 
+			// A record whose merged output isn't on disk has not resolved anything, whatever
+			// else it claims. Without this the record is self-certifying: every hash below
+			// still matches (the SOURCE mods are all present and unchanged - it's the OUTPUT
+			// that's gone), so this returned true forever, the conflict was reported
+			// alreadyResolved on every scan, and nothing ever re-merged it. Observed on a
+			// real install for game\vehicles\horse\states\exploration.ws: record present,
+			// merged file absent, and the game therefore loading exactly one of the two
+			// conflicting mods with no indication anything was wrong.
+			//
+			// The WinForms GUI already refused to trust such a record - MainForm's
+			// RefreshMergeTree() prunes it via ConfirmPruneMissingMergeFile - but that check
+			// lived only in the GUI, so the CLI, the MCP tools and the Vortex extension
+			// (which drives the headless host) never saw it. See MergeInventoryHygiene,
+			// which is where that rule and its two siblings now live for every caller;
+			// HasMergedFile also explains why bundle-content records are exempt.
+			if (!MergeInventoryHygiene.HasMergedFile(merge))
+				return false;
+
 			if (conflict.Mods.Any(mod => !mod.Name.EqualsIgnoreCase(merge.MergedModName) && !merge.ContainsMod(mod.Name)))
 				return false;
 

@@ -6,7 +6,7 @@ namespace WitcherScriptMerger
 	// every decision has a fixed, non-destructive default (don't overwrite,
 	// don't use a conflicting merge name, don't retry) so a batch run can
 	// never hang waiting for a prompt nobody is watching.
-	class HeadlessMergeNotifier : IMergeNotifier
+	public class HeadlessMergeNotifier : IMergeNotifier
 	{
 		public NotifyResult ShowMessage(string text,
 			string title = "",
@@ -47,12 +47,31 @@ namespace WitcherScriptMerger
 			return NotifyResult.OK;
 		}
 
+		// Set by both hosts' `mcp` verb before the server starts. In MCP mode stdout
+		// carries the JSON-RPC frame stream and nothing else - a notifier line printed
+		// there lands mid-stream and corrupts the transport, which the client sees as
+		// unparseable JSON rather than as a message from WSM.
+		//
+		// Found the hard way: a new advisory message in ModFileIndex (the disabled-mod
+		// skip notice) used the default DialogIcon.None, so Write sent it to stdout, and
+		// it appeared spliced between two protocol frames in a real `scan_conflicts`
+		// round-trip. The same hazard already existed for every other default-icon
+		// ShowMessage a scan can reach - notably BuildAsync's "Can't find any mods in the
+		// Mods directory." - so this is fixed here, once, rather than by picking a
+		// stderr-routed icon at each call site and calling the semantics close enough.
+		//
+		// CLI mode is unaffected: the flag stays false there, so ordinary progress output
+		// still goes to stdout and only Error/Warning/Exclamation go to stderr, exactly
+		// as before.
+		public static bool RouteAllOutputToStandardError;
+
 		static void Write(string text, string title, DialogIcon icon)
 		{
 			var prefix = string.IsNullOrEmpty(title) ? "WSM" : title;
 			var line = $"[{prefix}] {text}";
 
-			if (icon == DialogIcon.Error || icon == DialogIcon.Warning || icon == DialogIcon.Exclamation)
+			if (RouteAllOutputToStandardError
+				|| icon == DialogIcon.Error || icon == DialogIcon.Warning || icon == DialogIcon.Exclamation)
 				Console.Error.WriteLine(line);
 			else
 				Console.WriteLine(line);
