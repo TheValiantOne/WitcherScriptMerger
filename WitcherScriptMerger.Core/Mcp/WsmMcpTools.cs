@@ -7,6 +7,7 @@ using ModelContextProtocol.Server;
 using WitcherScriptMerger.Cli;
 using WitcherScriptMerger.Inventory;
 using WitcherScriptMerger.LoadOrder;
+using WitcherScriptMerger.Tools;
 
 namespace WitcherScriptMerger.Mcp
 {
@@ -43,6 +44,14 @@ namespace WitcherScriptMerger.Mcp
 					mods = c.Mods.Select(h => new { name = h.Name, hash = h.Hash, isOutdated = h.IsOutdated }).ToArray(),
 					defaultOrder = c.Mods.Select(h => h.Name).OrderBy(n => n, new LoadOrderComparer()).ToArray(),
 					alreadyResolved = AppState.Inventory.HasResolvedConflict(c),
+
+					// Per-conflict rather than a separate top-level section, so this array
+					// stays the whole payload and existing callers keep parsing it unchanged.
+					// Non-empty means at least one source mod's copy of this file predates the
+					// installed game build, which is the usual reason a conflict can't be
+					// auto-merged - and points at the mod to update rather than at a file to
+					// hand-merge. See StaleBuildDetector.
+					staleBuildWarnings = StaleBuildDetector.Analyze(c).Select(f => f.Describe()).ToArray(),
 				}).ToArray();
 			}
 		}
@@ -152,7 +161,25 @@ namespace WitcherScriptMerger.Mcp
 				if (!dryRun)
 					AppState.Inventory.Save();
 
-				return new { merged = summary.Merged, skipped = summary.Skipped, unmatched, dryRun, overwrite, functionLevelDecisions = summary.FunctionLevelDecisions };
+				// Computed over the conflicts actually in scope, and returned whether or not
+				// anything was skipped: when a skip IS present these usually name its real
+				// cause, and when nothing was skipped they're a standing heads-up that a mod
+				// is drifting behind the game build. Not gated on summary.Skipped for that
+				// second reason - a stale mod can merge fine right up until another mod
+				// starts touching the same declarations.
+				var staleBuild = StaleBuildDetector.Analyze(conflicts).Select(f => f.Describe()).ToArray();
+
+				return new
+				{
+					merged = summary.Merged,
+					skipped = summary.Skipped,
+					unmatched,
+					dryRun,
+					overwrite,
+					functionLevelDecisions = summary.FunctionLevelDecisions,
+					staleBuildWarnings = staleBuild,
+					disabledModsSkipped = modIndex.DisabledModsSkipped,
+				};
 			}
 		}
 
@@ -200,11 +227,29 @@ namespace WitcherScriptMerger.Mcp
 		{
 			var inventory = MergeInventory.Load(Paths.Inventory);
 
+			// One CustomLoadOrder for the whole listing rather than one per record. Null
+			// if mods.settings can't be read at all, which MergeInventoryHygiene handles by
+			// simply not applying its disabled-mod rule.
+			CustomLoadOrder loadOrder;
+			try { loadOrder = new CustomLoadOrder(); }
+			catch (Exception) { loadOrder = null; }
+
+			var staleByPath = MergeInventoryHygiene.FindStale(inventory, loadOrder)
+				.GroupBy(s => s.Merge.RelativePath, StringComparer.OrdinalIgnoreCase)
+				.ToDictionary(g => g.Key, g => g.Select(s => s.Describe()).ToArray(), StringComparer.OrdinalIgnoreCase);
+
 			return inventory.Merges.Select(m => new
 			{
 				relativePath = m.RelativePath,
 				mergedModName = m.MergedModName,
 				mods = m.Mods.Select(h => new { name = h.Name, hash = h.Hash }).ToArray(),
+
+				// A record is not evidence that a merge is live - its output file can be
+				// deleted, its source mods uninstalled or switched off, all without the
+				// record changing. Surfacing that here means a headless caller can see the
+				// same staleness the GUI prunes on every refresh.
+				mergedFileExists = MergeInventoryHygiene.HasMergedFile(m),
+				staleWarnings = staleByPath.TryGetValue(m.RelativePath ?? string.Empty, out var w) ? w : Array.Empty<string>(),
 			}).ToArray();
 		}
 

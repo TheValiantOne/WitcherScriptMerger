@@ -15,6 +15,7 @@ using WitcherScriptMerger.Forms;
 using WitcherScriptMerger.Inventory;
 using WitcherScriptMerger.LoadOrder;
 using WitcherScriptMerger.Mcp;
+using WitcherScriptMerger.Tools;
 
 namespace WitcherScriptMerger
 {
@@ -246,6 +247,15 @@ namespace WitcherScriptMerger
 			foreach (var decision in summary.FunctionLevelDecisions)
 				Console.WriteLine($"  function-level: {decision}");
 
+			// See the identical block in WitcherScriptMerger.Headless/Program.cs - both CLI
+			// entry points report the same diagnostics, since either can be the one a user
+			// (or the Vortex extension) actually runs.
+			foreach (var finding in StaleBuildDetector.Analyze(modIndex.Conflicts))
+				Console.WriteLine($"  stale mod build: {finding.Describe()}");
+
+			foreach (var stale in MergeInventoryHygiene.FindStale(Inventory, LoadOrder))
+				Console.WriteLine($"  stale merge record: {stale.Describe()}");
+
 			return summary.Skipped.Count == 0 ? 0 : 2;
 		}
 
@@ -275,6 +285,12 @@ namespace WitcherScriptMerger
 					"A required dependency (QuickBMS or wcc_lite) is missing. Configure its path in App.config.");
 				return 1;
 			}
+
+			// stdout carries JSON-RPC frames from here on, so every notifier line a scan
+			// or merge emits has to go to stderr instead - see
+			// HeadlessMergeNotifier.RouteAllOutputToStandardError. Set before the server is
+			// built, since Core code can emit through the notifier as soon as a tool runs.
+			HeadlessMergeNotifier.RouteAllOutputToStandardError = true;
 
 			var builder = Host.CreateApplicationBuilder();
 

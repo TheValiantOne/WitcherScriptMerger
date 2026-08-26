@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using WitcherScriptMerger.Inventory;
+using WitcherScriptMerger.LoadOrder;
 using WitcherScriptMerger.Tools;
 
 namespace WitcherScriptMerger.FileIndex
@@ -38,6 +39,9 @@ namespace WitcherScriptMerger.FileIndex
 			var modDirPaths = Directory.GetDirectories(Paths.ModsDirectory, "mod*", SearchOption.TopDirectoryOnly)
 				.Where(path => !ignoredModNames.Any(name => name.EqualsIgnoreCase(new DirectoryInfo(path).Name)))
 				.ToList();
+
+			modDirPaths = ExcludeDisabledMods(modDirPaths);
+
 			ModCount = modDirPaths.Count;
 			if (ModCount == 0)
 			{
@@ -153,6 +157,100 @@ namespace WitcherScriptMerger.FileIndex
 				AppState.Settings.Get("IgnoreModNames"),
 				AppState.Settings.Get("MergedModName"));
 		}
+
+		// Drops mod folders the game will never load because mods.settings marks them
+		// Enabled=0.
+		//
+		// A scan is a filesystem glob over Paths.ModsDirectory, so a mod that is deployed
+		// but disabled looked exactly like an active one, and its files were counted as
+		// full conflict participants. That is not a cosmetic over-count: a disabled mod
+		// can make a conflict genuinely unmergeable and keep it that way forever. Observed
+		// live - a disabled modFearlessRoach ships a pre-next-gen whole-file copy of
+		// game\vehicles\horse\states\exploration.ws (missing CheckVector / DoHorseKick /
+		// OnHorseKick), which trips FunctionLevelMergeEngine's vanilla-declaration
+		// invariant, so every run reported "needs manual resolution" for a file the game
+		// was never going to load that mod's version of anyway.
+		//
+		// Only an EXPLICIT Enabled=0 excludes a mod. CustomLoadOrder.IsModDisabledByName
+		// returns false for a mod that isn't in mods.settings at all, which is the correct
+		// reading: the game appends unknown mod folders on next launch, enabled. A missing
+		// or unreadable mods.settings likewise disables no one (CustomLoadOrder.Refresh
+		// leaves Mods empty), so this can never make a scan miss conflicts on a fresh
+		// install, or on a Linux host with no Documents\The Witcher 3 at all.
+		//
+		// Set MergeDisabledMods=true to opt out and go back to scanning every deployed mod
+		// - the useful case being pre-merging a mod that's staged but not switched on yet.
+		// The setting is named for the opt-OUT so that its absence from an older
+		// App.config (AppSettings.Get<bool> yields false for a key that isn't there) means
+		// the new, wanted behavior rather than silently keeping the old one.
+		private List<string> ExcludeDisabledMods(List<string> modDirPaths)
+		{
+			if (AppState.Settings.Get<bool>("MergeDisabledMods"))
+				return modDirPaths;
+
+			// Built here rather than taken from AppState.LoadOrder because the MCP tools
+			// never populate that field (only the CLI verb and the GUI do), and a scan
+			// must not depend on which entry point it was reached from.
+			CustomLoadOrder loadOrder;
+			try
+			{
+				loadOrder = AppState.LoadOrder ?? new CustomLoadOrder();
+			}
+			catch (Exception)
+			{
+				// mods.settings unreadable - exclude nothing, exactly as if every mod were enabled.
+				return modDirPaths;
+			}
+
+			var kept = ExcludeDisabledModPaths(modDirPaths, loadOrder.IsModDisabledByName, out var skipped);
+			DisabledModsSkipped = skipped;
+
+			// Reported, never silent: a conflict vanishing from the scan because a mod is
+			// switched off should be visible in the run's output, not something the user
+			// has to infer from a changed conflict count.
+			if (DisabledModsSkipped.Count > 0)
+			{
+				AppState.Notifier.ShowMessage(
+					$"Skipped {DisabledModsSkipped.Count} disabled mod folder(s) - the game won't load them, so they can't " +
+					$"conflict: {string.Join(", ", DisabledModsSkipped)}. Set MergeDisabledMods=true to include them anyway.",
+					"Disabled Mods Skipped");
+			}
+
+			return kept;
+		}
+
+		// Split out from ExcludeDisabledMods (above) as a pure function over a
+		// path list and a name predicate, so it's unit-testable without touching
+		// AppState.Settings or reading a real mods.settings - the same shape, and the same
+		// reason, as BuildIgnoredModNames just above. See
+		// WitcherScriptMerger.Tests/CLAUDE.md's "AppState.Settings-safety constraints".
+		//
+		// The predicate is asked about the mod's FOLDER NAME, not its full path: that's the
+		// name mods.settings keys on and the name the game itself loads by.
+		public static List<string> ExcludeDisabledModPaths(
+			IEnumerable<string> modDirPaths, Func<string, bool> isModDisabled, out List<string> skippedModNames)
+		{
+			skippedModNames = new List<string>();
+			var kept = new List<string>();
+			if (modDirPaths == null)
+				return kept;
+
+			foreach (var path in modDirPaths)
+			{
+				var name = Path.GetFileName(path);
+				if (isModDisabled != null && isModDisabled(name))
+					skippedModNames.Add(name);
+				else
+					kept.Add(path);
+			}
+
+			skippedModNames.Sort(StringComparer.OrdinalIgnoreCase);
+			return kept;
+		}
+
+		// Mod folder names left out of the most recent scan by ExcludeDisabledMods.
+		// Never null; empty when nothing was skipped.
+		public IReadOnlyList<string> DisabledModsSkipped { get; private set; } = new List<string>();
 
 		// Split out from GetIgnoredModNames (above) as a pure function over the two raw
 		// setting values so it's unit-testable without touching AppState.Settings - see

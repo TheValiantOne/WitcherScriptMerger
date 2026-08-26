@@ -10,6 +10,7 @@ using WitcherScriptMerger.Cli;
 using WitcherScriptMerger.Inventory;
 using WitcherScriptMerger.LoadOrder;
 using WitcherScriptMerger.Mcp;
+using WitcherScriptMerger.Tools;
 
 namespace WitcherScriptMerger.Headless
 {
@@ -163,6 +164,15 @@ namespace WitcherScriptMerger.Headless
 			foreach (var decision in summary.FunctionLevelDecisions)
 				Console.WriteLine($"  function-level: {decision}");
 
+			// Printed after the skip list on purpose: for a skipped conflict this is
+			// usually the actual reason, and it names the mod to fix rather than leaving
+			// "needs manual resolution" as the whole story.
+			foreach (var finding in StaleBuildDetector.Analyze(modIndex.Conflicts))
+				Console.WriteLine($"  stale mod build: {finding.Describe()}");
+
+			foreach (var stale in MergeInventoryHygiene.FindStale(AppState.Inventory, AppState.LoadOrder))
+				Console.WriteLine($"  stale merge record: {stale.Describe()}");
+
 			return summary.Skipped.Count == 0 ? 0 : 2;
 		}
 
@@ -203,6 +213,12 @@ namespace WitcherScriptMerger.Headless
 					"happen with the built-in DiffPlex engine - check for a corrupted install.");
 				return 1;
 			}
+
+			// stdout carries JSON-RPC frames from here on, so every notifier line a scan
+			// or merge emits has to go to stderr instead - see
+			// HeadlessMergeNotifier.RouteAllOutputToStandardError. Set before the server is
+			// built, since Core code can emit through the notifier as soon as a tool runs.
+			HeadlessMergeNotifier.RouteAllOutputToStandardError = true;
 
 			var builder = Host.CreateApplicationBuilder();
 
