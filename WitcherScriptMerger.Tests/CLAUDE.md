@@ -76,6 +76,30 @@ does.
   fall through correctly), malformed/truncated/empty XML degrading to `null` rather than
   throwing, null/blank inputs, and that `VortexSidecarFileName` still matches the name
   Vortex hardcodes — see Core's `CLAUDE.md`'s "Vortex-managed sidecar config" section.
+- `Tools/StaleBuildDetectorTests.cs` — `StaleBuildDetector.FindMissingVanillaDeclarations`,
+  the pure two-string core of the stale-build pre-flight check (see Core's `CLAUDE.md`'s
+  "Stale-build pre-flight"): a mod copy from an older build reporting the declaration it
+  lacks, an identical copy and a mod that only *adds* declarations both reporting nothing
+  (the check is deliberately one-directional), scoped names keeping a same-named method in
+  another class from masking a real loss, and unscannable text on *either* side yielding no
+  finding rather than a wall of false positives. Also `StaleBuildFinding.Describe`'s
+  wording, including a regression assertion that it does **not** claim the conflict "can't
+  be auto-merged" — the check runs before any merge and can't know that. The
+  `ModFile`-taking `Analyze` overloads are deliberately not covered: they read
+  `Paths.ScriptsDirectory`/`ModsDirectory` and `Paths.RetrieveMergedModName`, which force
+  `AppState.Settings` to construct (see below).
+- `Inventory/MergeInventoryHygieneTests.cs` — `MergeInventoryHygiene` and
+  `ModFileIndex.ExcludeDisabledModPaths`. Deliberately narrow on the hygiene side: every
+  rule concerning a *flat-file* record resolves a real path through
+  `Merge.GetMergedFile()`/`GetModFile()` → `Paths.ModsDirectory` → `AppState.Settings`, so
+  coverage is limited to the branches that return before any path is resolved — the
+  bundle-content exemption, the null/empty guards, and the pure message formatting.
+  `ExcludeDisabledModPaths` (the pure function behind the disabled-mod scan filter — see
+  Core's `CLAUDE.md`'s "Disabled mods are excluded from the conflict scan") is covered
+  fully: only the disabled mod excluded, the predicate asked for the folder *name* rather
+  than the full path, stable sorting of skipped names, and — the important one — a `null`
+  predicate or `null` path list excluding *nothing* rather than everything, so an
+  unreadable `mods.settings` can never make a scan silently report zero conflicts.
 - `LiveInstall.cs` — see "Live-install cross-check tests" below.
 
 ## `AppState.Settings`-safety constraints
